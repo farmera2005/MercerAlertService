@@ -9,3 +9,5 @@ export * from './probe';
 export * from './fetch';
 export * from './discover';
 export * from './sanitize';
+export * from './connection';
+export * from './setup-contract';

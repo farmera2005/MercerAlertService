@@ -18,12 +18,13 @@
     "db:generate": "pnpm --filter @mercer/db run generate",
     "db:migrate": "pnpm --filter @mercer/db run migrate",
     "db:seed": "pnpm --filter @mercer/db run seed",
-    "dev:db": "docker compose up -d db",
+    "dev:db": "docker run -d --name mas-dev-db -e POSTGRES_USER=mas -e POSTGRES_PASSWORD=mas -e POSTGRES_DB=mas -p 127.0.0.1:5432:5432 postgres:16-alpine",
     "dev:mock-swis": "pnpm --filter @mercer/mock-swis run dev",
     "dev:worker": "pnpm --filter @mercer/worker run dev",
     "dev:web": "pnpm --filter @mercer/web run dev",
     "swis:discover": "tsx scripts/swis-discover.ts",
-    "swis:record": "tsx scripts/swis-record.ts"
+    "swis:record": "tsx scripts/swis-record.ts",
+    "test:e2e": "pnpm --filter @mercer/web test:e2e"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

@@ -1,7 +1,7 @@
-import { sql } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import { slugify, type DivisionRef, type NodeOverride, type SiteRef } from '@mercer/core';
 import { divisions, nodeSiteOverrides, sites } from '../schema';
-import type { DbOrTx } from '../client';
+import type { Db, DbOrTx } from '../client';
 import { writeAudit } from './audit';
 
 export interface SiteContextData {
@@ -75,4 +75,136 @@ export async function createAutoSites(db: DbOrTx, values: string[]): Promise<num
 export async function countSites(db: DbOrTx): Promise<number> {
   const [r] = await db.select({ n: sql<number>`count(*)::int` }).from(sites);
   return r?.n ?? 0;
+}
+
+// ---------------------------------------------------------------------------------------------
+// Site Profile editing (setup wizard / Settings → Sites). Every change is audited.
+// ---------------------------------------------------------------------------------------------
+
+export type SiteRow = typeof sites.$inferSelect;
+export type DivisionRow = typeof divisions.$inferSelect;
+
+export async function listSites(db: DbOrTx): Promise<Array<SiteRow & { nodeCount: number }>> {
+  const rows = await db
+    .select({
+      site: sites,
+      nodeCount: sql<number>`(select count(*)::int from orion_nodes n where n.site_id = ${sites.id} and n.removed_at is null)`,
+    })
+    .from(sites)
+    .orderBy(sites.name);
+  return rows.map((r) => ({ ...r.site, nodeCount: r.nodeCount }));
+}
+
+export async function listDivisions(db: DbOrTx): Promise<DivisionRow[]> {
+  return db.select().from(divisions).orderBy(divisions.sortOrder, divisions.name);
+}
+
+export type SiteInput = Pick<
+  typeof sites.$inferInsert,
+  | 'name'
+  | 'divisionCode'
+  | 'city'
+  | 'state'
+  | 'lat'
+  | 'lon'
+  | 'tier'
+  | 'harvestCritical'
+  | 'aliases'
+  | 'ownerGroup'
+  | 'contactNotes'
+> & { code?: string };
+
+interface SiteActor {
+  actorType: 'user' | 'kiosk' | 'system';
+  actorId?: string | null;
+  actorLabel: string;
+  ip?: string | null;
+  userAgent?: string | null;
+}
+
+export async function createSite(db: Db, input: SiteInput, actor: SiteActor): Promise<SiteRow> {
+  return db.transaction(async (tx) => {
+    const code = input.code?.trim() || slugify(input.name);
+    const [row] = await tx
+      .insert(sites)
+      .values({ ...input, code, profileStatus: 'confirmed' })
+      .returning();
+    await writeAudit(tx, {
+      ...actor,
+      action: 'site.create',
+      targetType: 'site',
+      targetId: row!.id,
+      after: row,
+    });
+    return row!;
+  });
+}
+
+export async function updateSite(
+  db: Db,
+  id: number,
+  patch: Partial<SiteInput>,
+  actor: SiteActor,
+): Promise<SiteRow | null> {
+  return db.transaction(async (tx) => {
+    const [before] = await tx.select().from(sites).where(eq(sites.id, id));
+    if (!before) return null;
+    const [after] = await tx
+      .update(sites)
+      .set({ ...patch, profileStatus: 'confirmed', updatedAt: new Date() })
+      .where(eq(sites.id, id))
+      .returning();
+    await writeAudit(tx, {
+      ...actor,
+      action: 'site.update',
+      targetType: 'site',
+      targetId: id,
+      before,
+      after,
+    });
+    return after ?? null;
+  });
+}
+
+export async function deleteSite(db: Db, id: number, actor: SiteActor): Promise<boolean> {
+  return db.transaction(async (tx) => {
+    const [before] = await tx.delete(sites).where(eq(sites.id, id)).returning();
+    if (!before) return false;
+    await writeAudit(tx, {
+      ...actor,
+      action: 'site.delete',
+      targetType: 'site',
+      targetId: id,
+      before,
+    });
+    return true;
+  });
+}
+
+/** Map an Orion custom-property value onto an existing site (adds it as an alias). */
+export async function addSiteAlias(
+  db: Db,
+  id: number,
+  alias: string,
+  actor: SiteActor,
+): Promise<SiteRow | null> {
+  return db.transaction(async (tx) => {
+    const [before] = await tx.select().from(sites).where(eq(sites.id, id));
+    if (!before) return null;
+    if (before.aliases.some((a) => a.toLowerCase() === alias.toLowerCase())) return before;
+    const [after] = await tx
+      .update(sites)
+      .set({ aliases: [...before.aliases, alias], updatedAt: new Date() })
+      .where(eq(sites.id, id))
+      .returning();
+    await writeAudit(tx, {
+      ...actor,
+      action: 'site.add_alias',
+      targetType: 'site',
+      targetId: id,
+      before: { aliases: before.aliases },
+      after: { aliases: after!.aliases },
+    });
+    return after ?? null;
+  });
 }

@@ -1,17 +1,10 @@
-import {
-  assertSwisConfigured,
-  createLogger,
-  errorMessage,
-  initLogger,
-  loadConfig,
-} from '@mercer/core';
+import { createLogger, errorMessage, initLogger, loadConfig } from '@mercer/core';
 import { startHealthServer } from './health-server';
 import { createWorker } from './worker';
 
 const cfg = loadConfig();
 initLogger({ service: 'mas-worker', level: cfg.logLevel, version: cfg.version });
 const log = createLogger('main');
-assertSwisConfigured(cfg.swis);
 
 const worker = createWorker(cfg);
 const health = startHealthServer(worker, cfg.worker.healthPort);

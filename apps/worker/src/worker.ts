@@ -1,9 +1,24 @@
 import { hostname } from 'node:os';
+import pg from 'pg';
 import { PgBoss } from 'pg-boss';
-import { createLogger, errorMessage, type AppConfig, type Logger } from '@mercer/core';
+import {
+  ConfigError,
+  createLogger,
+  errorMessage,
+  isSwisConfigured,
+  loadConfig,
+  loadOrCreateMasterKey,
+  type AppConfig,
+  type Logger,
+  type SecretBox,
+} from '@mercer/core';
 import {
   createDb,
+  EVENTS_CHANNEL,
+  loadSettings,
   purgeExpired,
+  purgeExpiredSessions,
+  settingsFingerprint,
   upsertHeartbeat,
   type DbHandle,
   type PollerName,
@@ -13,15 +28,30 @@ import type { WorkerContext } from './context';
 import { POLLERS } from './pollers';
 import { runPoll } from './pollers/run-poll';
 import { POLL_EXPIRE_SEC, POLL_QUEUES, RETENTION_QUEUE } from './queues';
+import {
+  runCertJob,
+  runDiscoverJob,
+  runTestJob,
+  SETUP_QUEUES,
+  type ConnectionInput,
+} from './setup-jobs';
 import { SiteResolver } from './site-resolver';
 import { SourceMonitor } from './source-monitor';
 
+export type WorkerMode = 'awaiting_setup' | 'monitoring' | 'config_error';
+
 export interface Worker {
-  ctx: WorkerContext;
-  boss: PgBoss | null;
+  /** Current context, or null until the Orion connection is configured. */
+  readonly ctx: WorkerContext | null;
+  readonly cfg: AppConfig;
+  readonly mode: WorkerMode;
+  readonly boss: PgBoss | null;
+  readonly box: SecretBox;
   start(): Promise<void>;
   stop(): Promise<void>;
-  /** Run a poller inline (tests, CLI). */
+  /** Re-read settings from the database and apply them (also triggered by NOTIFY). */
+  reloadConfig(): Promise<void>;
+  /** Run a poller inline (tests, CLI). Returns null when not configured or on failure. */
   pollOnce(name: PollerName): ReturnType<typeof runPoll>;
   health(): Promise<{ ok: boolean; details: Record<string, unknown> }>;
 }
@@ -29,68 +59,235 @@ export interface Worker {
 export interface WorkerOptions {
   /** false = no pg-boss / no timers (integration tests drive pollOnce directly). */
   scheduling?: boolean;
+  /** Environment used to (re)build config; env values always win over saved settings. */
+  env?: NodeJS.ProcessEnv;
   log?: Logger;
   now?: () => Date;
 }
 
-export function createWorker(cfg: AppConfig, opts: WorkerOptions = {}): Worker {
+interface SwisRuntime {
+  key: string;
+  client: SwisClient;
+  probe: SchemaProbe;
+  fetcher: SwisFetcher;
+  source: SourceMonitor;
+}
+
+const swisKey = (c: AppConfig) =>
+  JSON.stringify({ ...c.swis, pollSec: undefined, staleAfterSec: undefined, writeback: undefined });
+const mappingKey = (c: AppConfig) => JSON.stringify(c.mapping);
+const pollKey = (c: AppConfig) => JSON.stringify(c.swis.pollSec);
+
+/**
+ * The worker starts with nothing but a database. Everything else (Orion connection, mapping,
+ * intervals) comes from settings saved in the web UI and is re-applied whenever they change.
+ * Polling begins once the setup wizard is finished — or immediately if the Orion credentials are
+ * supplied through the environment (infrastructure-as-code deployments, CI).
+ */
+export function createWorker(bootstrap: AppConfig, opts: WorkerOptions = {}): Worker {
   const log = opts.log ?? createLogger('worker');
+  const env = opts.env ?? process.env;
   const now = opts.now ?? (() => new Date());
+  const { box } = loadOrCreateMasterKey(env);
   const dbh: DbHandle = createDb({
-    url: cfg.database.url,
-    poolMax: cfg.database.poolMax,
+    url: bootstrap.database.url,
+    poolMax: bootstrap.database.poolMax,
     applicationName: 'mas-worker',
   });
-  const client = new SwisClient({
-    baseUrl: cfg.swis.baseUrl,
-    username: cfg.swis.username,
-    password: cfg.swis.password,
-    caCertPath: cfg.swis.caCertPath,
-    tlsServername: cfg.swis.tlsServername,
-    insecureSkipVerify: cfg.swis.insecureSkipVerify,
-    timeoutMs: cfg.swis.timeoutMs,
-    maxRetries: cfg.swis.maxRetries,
-    retryBaseMs: cfg.swis.retryBaseMs,
-    retryMaxMs: cfg.swis.retryMaxMs,
-    breakerThreshold: cfg.swis.breakerThreshold,
-    breakerCooldownMs: cfg.swis.breakerCooldownMs,
-    userAgent: `MercerAlertService/${cfg.version}`,
-    logger: createLogger('swis'),
-  });
-  const probe = new SchemaProbe(client, createLogger('swis-probe'));
-  const fetcher = new SwisFetcher(client, probe, {
-    pageSize: cfg.swis.pageSize,
-    incrementalPageSize: cfg.swis.incrementalPageSize,
-    eventsBackfill: cfg.swis.eventsBackfill,
-    naiveTimeZone: cfg.swis.naiveTimezone,
-    logger: createLogger('swis-fetch'),
-  });
-  const source = new SourceMonitor(
-    dbh.db,
-    client,
-    cfg.swis.staleAfterSec,
-    createLogger('source'),
-    now,
-  );
-  const ctx: WorkerContext = {
-    cfg,
-    log,
-    db: dbh.db,
-    swis: { client, probe, fetcher },
-    sites: new SiteResolver(dbh.db, cfg.mapping, createLogger('sites')),
-    source,
-    onTransitions: async () => {
-      /* M2: enqueue correlate.run */
-    },
-    now,
-  };
 
-  const scheduling = opts.scheduling ?? true;
+  let cfg = bootstrap;
+  let mode: WorkerMode = 'awaiting_setup';
+  let configError: string | null = null;
+  let runtime: SwisRuntime | null = null;
+  let ctx: WorkerContext | null = null;
+  let sites = new SiteResolver(dbh.db, cfg.mapping, createLogger('sites'));
   let boss: PgBoss | null = null;
-  const timers: NodeJS.Timeout[] = [];
+  let listener: pg.Client | null = null;
+  const scheduling = opts.scheduling ?? true;
+  const pollTimers: NodeJS.Timeout[] = [];
+  const baseTimers: NodeJS.Timeout[] = [];
   const startedAt = now();
   let stopping = false;
   let lastBeatOk: Date | null = null;
+  let fingerprint = '';
+  let reloadTimer: NodeJS.Timeout | null = null;
+  let reloading: Promise<void> | null = null;
+
+  const monitoringWanted = (c: AppConfig) =>
+    isSwisConfigured(c.swis) &&
+    (c.setupComplete || (c.envKeys.has('SWIS_USERNAME') && c.envKeys.has('SWIS_PASSWORD')));
+
+  async function buildRuntime(c: AppConfig): Promise<SwisRuntime> {
+    const client = new SwisClient({
+      baseUrl: c.swis.baseUrl,
+      username: c.swis.username,
+      password: c.swis.password,
+      caCertPath: c.swis.caCertPath,
+      caCertPem: c.swis.caCertPem,
+      tlsServername: c.swis.tlsServername,
+      insecureSkipVerify: c.swis.insecureSkipVerify,
+      timeoutMs: c.swis.timeoutMs,
+      maxRetries: c.swis.maxRetries,
+      retryBaseMs: c.swis.retryBaseMs,
+      retryMaxMs: c.swis.retryMaxMs,
+      breakerThreshold: c.swis.breakerThreshold,
+      breakerCooldownMs: c.swis.breakerCooldownMs,
+      userAgent: `MercerAlertService/${c.version}`,
+      logger: createLogger('swis'),
+    });
+    const probe = new SchemaProbe(client, createLogger('swis-probe'));
+    const fetcher = new SwisFetcher(client, probe, {
+      pageSize: c.swis.pageSize,
+      incrementalPageSize: c.swis.incrementalPageSize,
+      eventsBackfill: c.swis.eventsBackfill,
+      naiveTimeZone: c.swis.naiveTimezone,
+      logger: createLogger('swis-fetch'),
+    });
+    const source = new SourceMonitor(
+      dbh.db,
+      client,
+      c.swis.staleAfterSec,
+      createLogger('source'),
+      now,
+    );
+    await source.init();
+    return { key: swisKey(c), client, probe, fetcher, source };
+  }
+
+  function makeCtx(): WorkerContext | null {
+    if (!runtime) return null;
+    return {
+      cfg,
+      log,
+      db: dbh.db,
+      swis: { client: runtime.client, probe: runtime.probe, fetcher: runtime.fetcher },
+      sites,
+      source: runtime.source,
+      onTransitions: async () => {
+        /* M2: enqueue correlate.run */
+      },
+      now,
+    };
+  }
+
+  function clearPollTimers() {
+    for (const t of pollTimers.splice(0)) clearInterval(t);
+  }
+
+  function schedulePolls() {
+    clearPollTimers();
+    if (!boss || mode !== 'monitoring') return;
+    // Topology first: it refreshes the schema probe and custom-property list.
+    const order: PollerName[] = ['topology', 'alerts', 'nodes', 'interfaces', 'events'];
+    order.forEach((name, i) => {
+      const queue = POLL_QUEUES[name];
+      const enqueue = () => {
+        if (stopping || mode !== 'monitoring') return;
+        boss
+          ?.send(queue, {})
+          .catch((e: unknown) => log.error({ queue, err: errorMessage(e) }, 'enqueue failed'));
+      };
+      pollTimers.push(setTimeout(enqueue, i * 1500));
+      pollTimers.push(setInterval(enqueue, cfg.swis.pollSec[name] * 1000));
+    });
+  }
+
+  /** Apply a new config: rebuild the SWIS runtime / site resolver / tickers only where it changed. */
+  async function apply(next: AppConfig): Promise<void> {
+    const prev = cfg;
+    const prevMode = mode;
+    cfg = next;
+    if (mappingKey(prev) !== mappingKey(next) || !ctx)
+      sites = new SiteResolver(dbh.db, next.mapping, createLogger('sites'));
+    if (!isSwisConfigured(next.swis)) {
+      if (runtime) await runtime.client.close();
+      runtime = null;
+    } else if (!runtime || runtime.key !== swisKey(next)) {
+      const old = runtime;
+      runtime = await buildRuntime(next);
+      if (old) {
+        await old.client.close();
+        log.info(
+          { swis: next.swis.baseUrl },
+          'Orion connection settings changed; SWIS client rebuilt',
+        );
+      }
+      await runtime.probe
+        .refresh()
+        .catch((e: unknown) => log.warn({ err: errorMessage(e) }, 'schema probe failed'));
+    }
+    ctx = makeCtx();
+    mode = runtime && monitoringWanted(next) ? 'monitoring' : 'awaiting_setup';
+    if (mode !== prevMode) {
+      if (mode === 'monitoring')
+        log.info({ swis: next.swis.baseUrl, pollSec: next.swis.pollSec }, 'monitoring started');
+      else log.info('awaiting setup: finish the setup wizard in the web UI to start polling');
+    }
+    if (mode !== prevMode || pollKey(prev) !== pollKey(next)) {
+      if (mode === prevMode && mode === 'monitoring')
+        log.info({ pollSec: next.swis.pollSec }, 'poll intervals updated');
+      schedulePolls();
+    }
+  }
+
+  async function doReload(): Promise<void> {
+    try {
+      fingerprint = await settingsFingerprint(dbh.db);
+      const saved = await loadSettings(dbh.db, box);
+      if (saved.undecryptable.length) {
+        log.error(
+          { keys: saved.undecryptable },
+          'saved secrets cannot be decrypted (master key changed?); re-enter them in Settings',
+        );
+      }
+      const next = loadConfig(env, saved.values);
+      configError = null;
+      await apply(next);
+    } catch (err) {
+      configError = err instanceof ConfigError ? err.message : errorMessage(err);
+      if (mode === 'awaiting_setup') mode = 'config_error';
+      log.error(
+        { err: configError },
+        'could not apply saved settings; keeping the previous configuration',
+      );
+    }
+  }
+
+  /** Always reads settings that were committed before the call (waits out an in-flight reload first). */
+  async function reloadConfig(): Promise<void> {
+    while (reloading) await reloading;
+    reloading = doReload().finally(() => {
+      reloading = null;
+    });
+    return reloading;
+  }
+
+  function scheduleReload() {
+    if (reloadTimer) clearTimeout(reloadTimer);
+    reloadTimer = setTimeout(() => void reloadConfig(), 500);
+  }
+
+  async function listen(): Promise<void> {
+    try {
+      listener = new pg.Client({
+        connectionString: bootstrap.database.url,
+        application_name: 'mas-worker-listen',
+      });
+      listener.on('error', (e) =>
+        log.warn({ err: errorMessage(e) }, 'config listener error; falling back to polling'),
+      );
+      listener.on('notification', (n) => {
+        if (n.payload?.includes('"t":"config"')) scheduleReload();
+      });
+      await listener.connect();
+      await listener.query(`LISTEN ${EVENTS_CHANNEL}`);
+    } catch (err) {
+      log.warn(
+        { err: errorMessage(err) },
+        'could not LISTEN for config changes; using periodic checks only',
+      );
+    }
+  }
 
   async function beat(): Promise<void> {
     try {
@@ -103,17 +300,21 @@ export function createWorker(cfg: AppConfig, opts: WorkerOptions = {}): Worker {
       }
       await upsertHeartbeat(dbh.db, {
         component: 'worker',
-        status: 'ok',
+        status: mode === 'monitoring' ? 'ok' : mode,
         version: cfg.version,
         host: hostname(),
         details: {
           pid: process.pid,
+          mode,
+          configError,
           uptimeSec: Math.round((now().getTime() - startedAt.getTime()) / 1000),
           backlog,
         },
       });
-      await source.evaluate();
+      if (runtime && mode === 'monitoring') await runtime.source.evaluate();
       lastBeatOk = now();
+      // Fallback change detection if NOTIFY was missed.
+      if ((await settingsFingerprint(dbh.db)) !== fingerprint) await reloadConfig();
       if (cfg.worker.deadmanPingUrl) {
         await fetch(cfg.worker.deadmanPingUrl, { signal: AbortSignal.timeout(5000) }).catch(
           (e: unknown) => log.warn({ err: errorMessage(e) }, 'dead-man ping failed'),
@@ -124,23 +325,36 @@ export function createWorker(cfg: AppConfig, opts: WorkerOptions = {}): Worker {
     }
   }
 
+  const pollOnce = (name: PollerName) => {
+    const c = ctx;
+    if (!c) return Promise.resolve(null);
+    return runPoll(c, name, POLLERS[name]);
+  };
+
   return {
-    ctx,
+    get ctx() {
+      return ctx;
+    },
+    get cfg() {
+      return cfg;
+    },
+    get mode() {
+      return mode;
+    },
     get boss() {
       return boss;
     },
-    pollOnce: (name) => runPoll(ctx, name, POLLERS[name]),
+    box,
+    pollOnce,
+    reloadConfig,
 
     async start() {
-      await source.init();
-      await probe
-        .refresh()
-        .catch((e: unknown) => log.warn({ err: errorMessage(e) }, 'initial schema probe failed'));
+      await reloadConfig();
       await beat();
       if (!scheduling) return;
 
       boss = new PgBoss({
-        connectionString: cfg.database.url,
+        connectionString: bootstrap.database.url,
         application_name: 'mas-boss',
         max: 5,
       });
@@ -154,9 +368,43 @@ export function createWorker(cfg: AppConfig, opts: WorkerOptions = {}): Worker {
           expireInSeconds: POLL_EXPIRE_SEC[name],
         });
         await boss.work(queue, { pollingIntervalSeconds: 1 }, async () => {
-          await runPoll(ctx, name, POLLERS[name]);
+          if (mode === 'monitoring') await pollOnce(name);
         });
       }
+      // Setup-wizard jobs: answered within a second or two (the web request waits for them).
+      // Re-read settings first: the admin may have saved them a moment ago, before the NOTIFY-driven
+      // reload ran, and "use the saved connection" must mean the one just saved.
+      const setupHandler =
+        <T>(fn: (input: ConnectionInput) => Promise<T>) =>
+        async ([job]: Array<{ data: ConnectionInput }>) => {
+          await reloadConfig();
+          return fn(job?.data ?? {});
+        };
+      for (const queue of Object.values(SETUP_QUEUES)) {
+        await boss.createQueue(queue, {
+          policy: 'standard',
+          retryLimit: 0,
+          expireInSeconds: 180,
+          retentionSeconds: 3600,
+        });
+      }
+      const setupLog = createLogger('setup');
+      await boss.work(
+        SETUP_QUEUES.cert,
+        { pollingIntervalSeconds: 0.5 },
+        setupHandler((i) => runCertJob(i, cfg, box)),
+      );
+      await boss.work(
+        SETUP_QUEUES.test,
+        { pollingIntervalSeconds: 0.5 },
+        setupHandler((i) => runTestJob(i, cfg, box, dbh.db, setupLog)),
+      );
+      await boss.work(
+        SETUP_QUEUES.discover,
+        { pollingIntervalSeconds: 0.5 },
+        setupHandler((i) => runDiscoverJob(i, cfg, box, dbh.db, setupLog)),
+      );
+
       await boss.createQueue(RETENTION_QUEUE, {
         policy: 'singleton',
         retryLimit: 2,
@@ -164,43 +412,40 @@ export function createWorker(cfg: AppConfig, opts: WorkerOptions = {}): Worker {
       });
       await boss.work(RETENTION_QUEUE, async () => {
         const purged = await purgeExpired(dbh.db, cfg.retention);
+        await purgeExpiredSessions(dbh.db);
         log.info({ purged }, 'retention purge complete');
       });
       await boss.schedule(RETENTION_QUEUE, cfg.retention.cron, {}, { tz: cfg.timezone });
 
-      // Interval ticks → stately queues (dedupes across replicas, never overlaps a slow poll).
-      // Topology first: it refreshes the schema probe and custom-property list.
-      const order: PollerName[] = ['topology', 'alerts', 'nodes', 'interfaces', 'events'];
-      order.forEach((name, i) => {
-        const queue = POLL_QUEUES[name];
-        const enqueue = () => {
-          if (stopping) return;
-          boss
-            ?.send(queue, {})
-            .catch((e: unknown) => log.error({ queue, err: errorMessage(e) }, 'enqueue failed'));
-        };
-        timers.push(setTimeout(enqueue, i * 1500));
-        timers.push(setInterval(enqueue, cfg.swis.pollSec[name] * 1000));
-      });
-      timers.push(setInterval(() => void beat(), cfg.worker.heartbeatSec * 1000));
-      log.info({ pollSec: cfg.swis.pollSec, swis: cfg.swis.baseUrl }, 'worker started');
+      await listen();
+      schedulePolls();
+      baseTimers.push(setInterval(() => void beat(), cfg.worker.heartbeatSec * 1000));
+      log.info(
+        { mode, swis: isSwisConfigured(cfg.swis) ? cfg.swis.baseUrl : null },
+        'worker started',
+      );
     },
 
     async stop() {
       stopping = true;
-      for (const t of timers) clearInterval(t);
+      clearPollTimers();
+      for (const t of baseTimers.splice(0)) clearInterval(t);
+      if (reloadTimer) clearTimeout(reloadTimer);
+      await listener?.end().catch(() => {});
       if (boss) await boss.stop({ graceful: true, timeout: 15_000 }).catch(() => {});
-      await client.close();
+      await runtime?.client.close();
       await dbh.close();
     },
 
     async health() {
       const details: Record<string, unknown> = {
+        mode,
+        configError,
         uptimeSec: Math.round((now().getTime() - startedAt.getTime()) / 1000),
         lastHeartbeatAt: lastBeatOk?.toISOString() ?? null,
-        source: source.current,
-        breaker: client.breaker.snapshot().state,
-        tlsVerification: client.getStats().tlsVerification,
+        source: runtime?.source.current ?? 'not_configured',
+        breaker: runtime?.client.breaker.snapshot().state ?? null,
+        tlsVerification: runtime?.client.getStats().tlsVerification ?? null,
       };
       try {
         await dbh.pool.query('select 1');
@@ -210,6 +455,7 @@ export function createWorker(cfg: AppConfig, opts: WorkerOptions = {}): Worker {
         return { ok: false, details };
       }
       const staleMs = cfg.worker.heartbeatSec * 4 * 1000;
+      // Awaiting setup is a healthy state: the container must stay up so the wizard can use it.
       const ok = !!lastBeatOk && now().getTime() - lastBeatOk.getTime() < staleMs;
       return { ok, details };
     },

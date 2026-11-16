@@ -6,6 +6,7 @@ export default defineConfig({
   entry: {
     index: 'src/index.ts',
     migrate: 'src/migrate-cli.ts',
+    init: 'src/init-cli.ts',
     discover: '../../scripts/swis-discover.ts',
   },
   format: ['esm'],

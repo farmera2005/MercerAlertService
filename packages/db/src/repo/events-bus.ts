@@ -8,7 +8,8 @@ export type BusEvent =
   | { t: 'poll'; poller: string; ok: boolean; transitions?: number }
   | { t: 'source'; status: 'up' | 'down' }
   | { t: 'incident'; id: number; change: string }
-  | { t: 'heartbeat'; component: string };
+  | { t: 'heartbeat'; component: string }
+  | { t: 'config' };
 
 export async function publishEvent(db: DbOrTx, ev: BusEvent): Promise<void> {
   await db.execute(sql`select pg_notify(${EVENTS_CHANNEL}, ${JSON.stringify(ev)})`);

@@ -28,7 +28,8 @@ describe('loadConfig', () => {
     expect(cfg.swis.baseUrl).toBe('https://orion.mercer.local:17774');
   });
   it('rejects bad values', () => {
-    expect(() => loadConfig({})).toThrow(ConfigError);
+    expect(() => loadConfig({ NODE_ENV: 'production' })).toThrow(/DATABASE_URL/);
+    expect(loadConfig({}).database.url).toBe('postgres://mas:mas@localhost:5432/mas');
     expect(() => loadConfig({ DATABASE_URL: 'x', APP_TIMEZONE: 'Mars/Olympus' })).toThrow(
       /time zone/,
     );

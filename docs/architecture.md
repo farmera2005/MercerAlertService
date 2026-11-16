@@ -27,14 +27,15 @@ Design rules. Every later decision follows from these:
 
 ## 2. Components
 
-| Service (Compose) | Process                        | Responsibilities                                                                                                                                                                 |
-| ----------------- | ------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `db`              | PostgreSQL 16                  | All state: SWIS mirror, transitions, incidents, config, audit, pg-boss queues (`pgboss` schema). Named volume `pgdata`.                                                          |
-| `migrate`         | one-shot (worker image)        | Applies Drizzle SQL migrations, then exits. `web` and `worker` wait for it to complete.                                                                                          |
-| `worker`          | Node (long-running)            | SWIS polling, correlation, scoring, AI calls, notifications, escalations, digests, retention, self-monitoring, heartbeat. Exposes `:9090/healthz` for the container healthcheck. |
-| `web`             | Next.js (App Router)           | IT dashboard (Entra SSO), admin, "Ask the network" chat API, SSE streams, `/wall` kiosk, `/api/health`. **Does no polling.**                                                     |
-| `backup`          | postgres:16-alpine + cron loop | Nightly `pg_dump -Fc` to the `backups` volume, with rotation.                                                                                                                    |
-| `mock-swis`       | Node (dev/CI profile only)     | Fake SWIS that serves a synthetic Mercer-like world or recorded fixtures, with a control API for scenarios.                                                                      |
+| Service (Compose) | Process                        | Responsibilities                                                                                                                                                                                    |
+| ----------------- | ------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `init`            | one-shot (worker image, root)  | Generates the bootstrap secrets once into the `bootstrap` volume: DB password, `database_url` and the **master key** that encrypts secrets saved in the web UI. It never overwrites existing files. |
+| `db`              | PostgreSQL 16                  | All state: SWIS mirror, transitions, incidents, config, audit, pg-boss queues (`pgboss` schema). Named volume `pgdata`.                                                                             |
+| `migrate`         | one-shot (worker image)        | Applies Drizzle SQL migrations, then exits. `web` and `worker` wait for it to complete.                                                                                                             |
+| `worker`          | Node (long-running)            | SWIS polling, correlation, scoring, AI calls, notifications, escalations, digests, retention, self-monitoring, heartbeat. Exposes `:9090/healthz` for the container healthcheck.                    |
+| `web`             | Next.js (App Router)           | IT dashboard (Entra SSO), admin, "Ask the network" chat API, SSE streams, `/wall` kiosk, `/api/health`. **Does no polling.**                                                                        |
+| `backup`          | postgres:16-alpine + cron loop | Nightly `pg_dump -Fc` to the `backups` volume, with rotation.                                                                                                                                       |
+| `mock-swis`       | Node (dev/CI profile only)     | Fake SWIS that serves a synthetic Mercer-like world or recorded fixtures, with a control API for scenarios.                                                                                         |
 
 Monorepo packages (pnpm workspaces, TypeScript everywhere):
 
@@ -346,12 +347,59 @@ Each task's model can be overridden with `AI_MODEL_<TASK>`.
   `MAP_MODE=image` to use an offline image with `CRS.Simple` and per-site pixel
   coordinates.
 
+## 10b. Configuration & first-run setup
+
+```mermaid
+sequenceDiagram
+  participant A as Admin (browser)
+  participant W as web (Next.js)
+  participant DB as Postgres
+  participant K as worker
+  participant O as Orion SWIS
+  Note over W: first start: no admin → setup code<br/>printed in `docker compose logs web`
+  A->>W: /setup: setup code + admin username/password
+  W->>DB: local_accounts (scrypt), session cookie, audit
+  A->>W: SolarWinds form → "Fetch certificate" / "Test connection"
+  W->>DB: pg-boss job setup.swis.cert|test (password sealed with master key)
+  K->>O: TLS handshake / SWQL count queries
+  K-->>DB: job output (certificate thumbprints, result + plain-language hint)
+  W-->>A: result; admin trusts the cert, saves → app_settings (+ NOTIFY mas_events)
+  K->>DB: reload settings (LISTEN, 15 s fallback) → rebuild SWIS client
+  A->>W: Mapping → "Run discovery" (job) → pick custom properties; Sites; General
+  A->>W: Finish → MAS_SETUP_COMPLETE=true
+  K->>O: polling starts
+```
+
+- **Effective config** = `loadConfig(env, savedSettings)`. The environment wins, then saved
+  settings, then the zod defaults. The settings registry
+  (`packages/core/src/config/registry.ts`) drives the forms: labels, kinds, sections and
+  "advanced" flags.
+- **The worker starts with only a database.** It runs in `awaiting_setup` mode, and it
+  answers wizard jobs as soon as a connection exists. It only polls once
+  `MAS_SETUP_COMPLETE=true`, or immediately when Orion credentials come from the
+  environment (IaC and CI). Invalid saved settings are rejected on save. If invalid values
+  get in anyway, the worker keeps the last good config and reports the problem.
+- **The web app still never calls SWIS.** Certificate fetch, connection test and discovery
+  are pg-boss jobs (`setup.swis.*`) that the worker runs. The server action waits up to 45 to
+  120 s for the job's output. Before running, the worker reloads settings, so "use the
+  saved connection" means the connection saved a moment ago.
+- **Setup-code protection.** Until the first admin exists, `/setup` requires a one-time code
+  that only appears in the server log. Being able to reach port 3000 isn't enough to claim
+  the installation. Attempts are rate-limited, and the account creation is serialized with
+  an advisory lock.
+- **Local admin accounts** use scrypt, DB-backed sessions storing only SHA-256 token hashes,
+  httpOnly cookies, a 12 h idle and 7 d absolute lifetime, and rate-limited sign-in. They are
+  the break-glass path once Entra ID SSO (M3) is configured, also from the UI.
+
 ## 11. Security & operations
 
-- Secrets come only from environment variables or Docker secrets. Every secret `X` also
-  accepts `X_FILE`. We ship `.env.example` and never commit real values. Teams webhook
-  URLs are secrets: admin routing rules reference channels by key (`TEAMS_WEBHOOK_<KEY>`),
-  never by URL.
+- **No configuration files.** Operator settings are entered in the web UI (setup wizard /
+  Settings) and stored in `app_settings`. Secrets are encrypted at rest with AES-256-GCM
+  under the master key from the `bootstrap` volume. They are never sent back to the
+  browser, and the audit log redacts them. Environment variables (and `X_FILE` Docker
+  secrets) still work and take precedence; those fields show as locked in the UI. We ship
+  `.env.example` as an optional override list and never commit real values. Teams webhook
+  URLs (M4) will be stored the same way, as encrypted settings.
 - An `audit_log` row is written for every UI mutation, every kiosk token change, and
   every write-back to Orion.
 - **Self-monitoring.** The worker heartbeat is written every 15 s. `/api/health` returns
@@ -376,4 +424,5 @@ Each task's model can be overridden with `AI_MODEL_<TASK>`.
 | Structured outputs instead of forced tool calls | Current Claude models reject forced `tool_choice`. JSON-schema output plus Zod gives the same guarantee.                                                                                                                                                                                                   |
 | **Node 22+** (images use Node 24 LTS)           | Node 20 reached end of life in April 2026. pg-boss 12 and undici 8 require Node ≥ 22.                                                                                                                                                                                                                      |
 | TypeScript 5.9 (pinned)                         | TS 7 (the native compiler) isn't supported yet by typescript-eslint or Next tooling.                                                                                                                                                                                                                       |
+| Settings in the DB, encrypted (not `.env`)      | The requirement is set-up completely online with no config files. Secrets are sealed with a key that lives outside the DB, so a dump alone exposes nothing. Env vars still win for IaC.                                                                                                                    |
 | Leaflet over MapLibre                           | We only need raster OSM and an offline image overlay (`CRS.Simple`). It is lighter and simpler.                                                                                                                                                                                                            |

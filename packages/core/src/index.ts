@@ -1,5 +1,7 @@
 export * from './config/env';
 export * from './config/file-env';
+export * from './config/registry';
+export * from './crypto';
 export * from './logger';
 export * from './orion';
 export * from './uri';

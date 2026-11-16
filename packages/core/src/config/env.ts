@@ -13,7 +13,8 @@ export const envSchema = z.object({
   APP_BASE_URL: str('http://localhost:3000'),
   APP_VERSION: str('dev'),
 
-  DATABASE_URL: z.string().min(1, 'DATABASE_URL is required'),
+  /** Docker: DATABASE_URL_FILE written by `init`. Outside production defaults to the dev database. */
+  DATABASE_URL: z.string().optional(),
   DATABASE_POOL_MAX: int(10, 1),
 
   // --- SWIS ---
@@ -24,6 +25,8 @@ export const envSchema = z.object({
   SWIS_USERNAME: str(''),
   SWIS_PASSWORD: str(''),
   SWIS_CA_CERT_PATH: z.string().optional(),
+  /** PEM content (set from the web setup wizard). Used in addition to SWIS_CA_CERT_PATH. */
+  SWIS_CA_CERT_PEM: z.string().optional(),
   SWIS_TLS_SERVERNAME: z.string().optional(),
   SWIS_TLS_INSECURE_SKIP_VERIFY_DEV_ONLY: bool(false),
   SWIS_TIMEOUT_MS: int(20_000, 1000),
@@ -68,15 +71,27 @@ export const envSchema = z.object({
 
   // --- Web ---
   HEALTH_WORKER_STALE_SEC: int(60, 10),
+
+  // --- Bootstrap / security ---
+  /** 32-byte base64 key that encrypts secrets stored in the database. Usually MAS_MASTER_KEY_FILE. */
+  MAS_MASTER_KEY: z.string().optional(),
+  /** Where a generated master key is kept when none is supplied (local development). */
+  MAS_DATA_DIR: z.string().optional(),
+  /** Set by the web setup wizard's final step; polling starts once true. */
+  MAS_SETUP_COMPLETE: bool(false),
 });
 
 export type RawEnv = z.infer<typeof envSchema>;
+
+/** Matches `pnpm dev:db`. Only used when NODE_ENV is not production. */
+export const DEV_DATABASE_URL = 'postgres://mas:mas@localhost:5432/mas';
 
 export interface SwisConfig {
   baseUrl: string;
   username: string;
   password: string;
   caCertPath?: string;
+  caCertPem?: string;
   tlsServername?: string;
   insecureSkipVerify: boolean;
   timeoutMs: number;
@@ -121,36 +136,85 @@ export interface AppConfig {
   };
   worker: { healthPort: number; heartbeatSec: number; deadmanPingUrl?: string };
   web: { workerStaleSec: number };
+  setupComplete: boolean;
+  /** Which keys came from the environment (and are therefore locked in the web UI). */
+  envKeys: ReadonlySet<string>;
 }
 
 export class ConfigError extends Error {
   override name = 'ConfigError';
+  issues: ConfigIssue[] = [];
 }
 
 function assertTimezone(tz: string, key: string): void {
   try {
     new Intl.DateTimeFormat('en-US', { timeZone: tz });
   } catch {
-    throw new ConfigError(`${key}="${tz}" is not a valid IANA time zone`);
+    const err = new ConfigError(`${key}="${tz}" is not a valid IANA time zone`);
+    err.issues = [{ key, message: 'not a valid IANA time zone (e.g. America/New_York)' }];
+    throw err;
   }
 }
 
-/** Parse and validate configuration from env (with *_FILE secrets). Throws ConfigError. */
-export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
-  const known = (k: string) =>
-    k in envSchema.shape || SECRET_ENV_PREFIXES.some((p) => k.startsWith(p));
-  const parsed = envSchema.safeParse(resolveFileEnv(env, known));
+/** Keys of the env schema. */
+export type ConfigKey = keyof RawEnv & string;
+
+export function isConfigKey(k: string): k is ConfigKey {
+  return k in envSchema.shape;
+}
+
+const knownEnv = (k: string) => isConfigKey(k) || SECRET_ENV_PREFIXES.some((p) => k.startsWith(p));
+
+/** The schema keys explicitly present in the environment (after *_FILE resolution). */
+export function envConfigKeys(env: NodeJS.ProcessEnv = process.env): Set<string> {
+  return new Set(Object.keys(resolveFileEnv(env, knownEnv)).filter(isConfigKey));
+}
+
+export interface ConfigIssue {
+  key: string;
+  message: string;
+}
+
+/**
+ * Parse and validate configuration. Precedence: environment (incl. *_FILE) → `overrides`
+ * (settings saved in the web UI, decrypted) → schema defaults. Throws ConfigError.
+ */
+export function loadConfig(
+  env: NodeJS.ProcessEnv = process.env,
+  overrides: Record<string, string> = {},
+): AppConfig {
+  const fromEnv = resolveFileEnv(env, knownEnv);
+  const envKeys = new Set(Object.keys(fromEnv).filter(isConfigKey));
+  const fromDb: Record<string, string> = {};
+  for (const [k, v] of Object.entries(overrides)) {
+    if (isConfigKey(k) && !envKeys.has(k) && v !== '') fromDb[k] = v;
+  }
+  const parsed = envSchema.safeParse({ ...fromDb, ...fromEnv });
   if (!parsed.success) {
-    throw new ConfigError(`Invalid configuration:\n${z.prettifyError(parsed.error)}`);
+    const err = new ConfigError(`Invalid configuration:\n${z.prettifyError(parsed.error)}`);
+    err.issues = parsed.error.issues.map((i) => ({
+      key: String(i.path[0] ?? ''),
+      message: i.message,
+    }));
+    throw err;
   }
   const e = parsed.data;
+  const databaseUrl =
+    e.DATABASE_URL ?? (e.NODE_ENV === 'production' ? undefined : DEV_DATABASE_URL);
+  if (!databaseUrl) {
+    const err = new ConfigError('DATABASE_URL (or DATABASE_URL_FILE) is required in production');
+    err.issues = [{ key: 'DATABASE_URL', message: 'required' }];
+    throw err;
+  }
   assertTimezone(e.APP_TIMEZONE, 'APP_TIMEZONE');
   assertTimezone(e.SWIS_NAIVE_TIMEZONE, 'SWIS_NAIVE_TIMEZONE');
   if (e.SITE_FROM_CAPTION_REGEX) {
     try {
       new RegExp(e.SITE_FROM_CAPTION_REGEX);
     } catch {
-      throw new ConfigError(`SITE_FROM_CAPTION_REGEX is not a valid regular expression`);
+      const err = new ConfigError(`SITE_FROM_CAPTION_REGEX is not a valid regular expression`);
+      err.issues = [{ key: 'SITE_FROM_CAPTION_REGEX', message: 'not a valid regular expression' }];
+      throw err;
     }
   }
   const baseUrl = (e.SWIS_BASE_URL ?? `https://${e.SWIS_HOST}:${e.SWIS_PORT}`).replace(/\/+$/, '');
@@ -161,12 +225,13 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     timezone: e.APP_TIMEZONE,
     baseUrl: e.APP_BASE_URL.replace(/\/+$/, ''),
     version: e.APP_VERSION,
-    database: { url: e.DATABASE_URL, poolMax: e.DATABASE_POOL_MAX },
+    database: { url: databaseUrl, poolMax: e.DATABASE_POOL_MAX },
     swis: {
       baseUrl,
       username: e.SWIS_USERNAME,
       password: e.SWIS_PASSWORD,
       caCertPath: e.SWIS_CA_CERT_PATH,
+      caCertPem: e.SWIS_CA_CERT_PEM,
       tlsServername: e.SWIS_TLS_SERVERNAME,
       insecureSkipVerify: e.SWIS_TLS_INSECURE_SKIP_VERIFY_DEV_ONLY,
       timeoutMs: e.SWIS_TIMEOUT_MS,
@@ -214,10 +279,17 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
       deadmanPingUrl: e.DEADMAN_PING_URL,
     },
     web: { workerStaleSec: e.HEALTH_WORKER_STALE_SEC },
+    setupComplete: e.MAS_SETUP_COMPLETE,
+    envKeys,
   };
 }
 
-/** Extra validation for processes that talk to SWIS (worker, scripts). */
+/** True once the Orion connection has the minimum it needs (host or base URL, user, password). */
+export function isSwisConfigured(cfg: SwisConfig): boolean {
+  return !!cfg.baseUrl && !!cfg.username && !!cfg.password;
+}
+
+/** Extra validation for processes that talk to SWIS (scripts). */
 export function assertSwisConfigured(cfg: SwisConfig): void {
   const missing: string[] = [];
   if (!cfg.username) missing.push('SWIS_USERNAME');

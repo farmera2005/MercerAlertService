@@ -5,7 +5,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { sql } from 'drizzle-orm';
 import pg from 'pg';
-import { initLogger, loadConfig } from '@mercer/core';
+import { generateMasterKey, initLogger, loadConfig } from '@mercer/core';
 import { createDb, purgeExpired, seedReferenceData, type DbHandle } from '@mercer/db';
 import { runMigrations } from '@mercer/db/migrate';
 import { setNodeStatus, startMockSwis, type MockSwis } from '@mercer/mock-swis';
@@ -44,7 +44,7 @@ describe.skipIf(!url)('worker ingestion (integration)', () => {
     h = createDb({ url: url!, poolMax: 2 });
     await seedReferenceData(h.db);
     mock = await startMockSwis({ port: 0 });
-    const cfg = loadConfig({
+    const env = {
       DATABASE_URL: url,
       SWIS_BASE_URL: mock.url,
       SWIS_USERNAME: 'mas',
@@ -55,8 +55,9 @@ describe.skipIf(!url)('worker ingestion (integration)', () => {
       SWIS_PAGE_SIZE: '25',
       SWIS_STALE_AFTER_SEC: '60',
       LOG_LEVEL: 'silent',
-    });
-    worker = createWorker(cfg, { scheduling: false, log: silent });
+      MAS_MASTER_KEY: generateMasterKey(),
+    };
+    worker = createWorker(loadConfig(env), { scheduling: false, log: silent, env });
     await worker.start();
   });
 

@@ -1,12 +1,18 @@
 import 'server-only';
 import { listHeartbeats, listPollerStates } from '@mercer/db';
-import { server } from './db';
+import { server } from './server';
+import { getSettingsState } from './settings';
 
 export interface HealthReport {
-  status: 'ok' | 'degraded' | 'down';
+  status: 'ok' | 'degraded' | 'down' | 'setup_required';
   checkedAt: string;
   db: 'ok' | 'error';
-  worker: { status: 'ok' | 'stale' | 'missing'; lastBeatAt: string | null; ageSec: number | null };
+  worker: {
+    status: 'ok' | 'stale' | 'missing';
+    mode: string | null;
+    lastBeatAt: string | null;
+    ageSec: number | null;
+  };
   swis: { status: string; lastAlertPollSuccessAt: string | null; tlsVerification: string | null };
   pollers: Array<{
     poller: string;
@@ -23,23 +29,31 @@ export interface HealthReport {
 export async function getHealth(
   opts: { liveness?: boolean } = {},
 ): Promise<{ httpStatus: number; report: HealthReport }> {
-  const { cfg, db } = server();
+  const { bootstrap, db } = server();
   const now = Date.now();
   const report: HealthReport = {
     status: 'ok',
     checkedAt: new Date(now).toISOString(),
     db: 'ok',
-    worker: { status: 'missing', lastBeatAt: null, ageSec: null },
+    worker: { status: 'missing', mode: null, lastBeatAt: null, ageSec: null },
     swis: { status: 'unknown', lastAlertPollSuccessAt: null, tlsVerification: null },
     pollers: [],
   };
+  let setupComplete: boolean;
   try {
-    const [beats, pollers] = await Promise.all([listHeartbeats(db.db), listPollerStates(db.db)]);
+    const [beats, pollers, settings] = await Promise.all([
+      listHeartbeats(db.db),
+      listPollerStates(db.db),
+      getSettingsState(),
+    ]);
+    const cfg = settings.cfg ?? bootstrap;
+    setupComplete = cfg.setupComplete || cfg.envKeys.has('SWIS_PASSWORD');
     const w = beats.find((b) => b.component === 'worker');
     if (w) {
       const age = Math.round((now - w.lastBeatAt.getTime()) / 1000);
       report.worker = {
         status: age > cfg.web.workerStaleSec ? 'stale' : 'ok',
+        mode: (w.details as { mode?: string }).mode ?? w.status,
         lastBeatAt: w.lastBeatAt.toISOString(),
         ageSec: age,
       };
@@ -68,6 +82,7 @@ export async function getHealth(
   // also requires a fresh worker heartbeat.
   if (opts.liveness) return { httpStatus: 200, report };
   if (report.worker.status !== 'ok') report.status = 'down';
+  else if (!setupComplete) report.status = 'setup_required';
   else if (report.swis.status !== 'up') report.status = 'degraded';
   return { httpStatus: report.status === 'down' ? 503 : 200, report };
 }

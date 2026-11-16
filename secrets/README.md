@@ -1,10 +1,19 @@
-# secrets/
+# secrets/ (optional)
 
-Not committed (see `.gitignore`). Mounted read-only into the containers at `/run/mas-secrets`.
+Not committed (see `.gitignore`). **Not needed for a normal install**: the `init` container
+generates the bootstrap secrets, and everything else is entered in the web UI, where secrets
+are stored encrypted.
 
-| File            | Used by | Notes                                                                                                  |
-| --------------- | ------- | ------------------------------------------------------------------------------------------------------ |
-| `orion-ca.pem`  | worker  | Orion's certificate (or its issuing CA) in PEM. Set `SWIS_CA_CERT_PATH=/run/mas-secrets/orion-ca.pem`. |
-| `swis_password` | worker  | Optional alternative to `SWIS_PASSWORD`: set `SWIS_PASSWORD_FILE=/run/mas-secrets/swis_password`.      |
+Use this folder only if you prefer files over the web UI, for example to mount an Orion CA
+certificate with a `docker-compose.override.yml`:
 
-Any secret variable `X` can be supplied as a file with `X_FILE=/run/mas-secrets/<file>`.
+```yaml
+services:
+  worker:
+    volumes: ['./secrets:/run/mas-secrets:ro']
+    environment:
+      SWIS_CA_CERT_PATH: /run/mas-secrets/orion-ca.pem
+```
+
+It is also where you can put `corp-ca.pem` for `BUILD_CA_FILE` when building behind a
+TLS-inspecting proxy.

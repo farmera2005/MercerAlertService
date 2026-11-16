@@ -14,4 +14,6 @@ export * from './repo/ingest-interfaces';
 export * from './repo/ingest-topology';
 export * from './repo/ingest-events';
 export * from './repo/retention';
+export * from './repo/settings';
+export * from './repo/accounts';
 export * from './seed';

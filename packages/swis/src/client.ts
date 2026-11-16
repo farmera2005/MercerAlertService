@@ -19,6 +19,7 @@ export interface SwisClientOptions {
   username: string;
   password: string;
   caCertPath?: string;
+  caCertPem?: string;
   tlsServername?: string;
   insecureSkipVerify?: boolean;
   timeoutMs?: number;
@@ -104,6 +105,7 @@ export class SwisClient {
       ? buildTlsConnectOptions(
           {
             caCertPath: opts.caCertPath,
+            caCertPem: opts.caCertPem,
             tlsServername: opts.tlsServername,
             insecureSkipVerify: this.insecure,
           },
