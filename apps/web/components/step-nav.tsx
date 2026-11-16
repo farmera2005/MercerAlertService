@@ -73,6 +73,9 @@ export const SETTINGS_TABS = [
   { href: '/settings/orion', label: 'SolarWinds' },
   { href: '/settings/mapping', label: 'Mapping' },
   { href: '/settings/sites', label: 'Sites' },
+  { href: '/settings/correlation', label: 'Correlation & priority' },
+  { href: '/settings/seasons', label: 'Seasons' },
+  { href: '/settings/maintenance', label: 'Maintenance' },
   { href: '/settings/general', label: 'General' },
 ] as const;
 

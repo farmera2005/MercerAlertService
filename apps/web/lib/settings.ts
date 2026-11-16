@@ -4,6 +4,7 @@ import {
   ConfigError,
   envConfigKeys,
   envSchema,
+  isSecretSetting,
   loadConfig,
   resolveFileEnv,
   SETTINGS,
@@ -156,9 +157,11 @@ function validateKind(def: SettingDef, value: string): string | null {
       } catch {
         return 'This is not a valid PEM certificate (-----BEGIN CERTIFICATE----- …).';
       }
-    case 'int': {
+    case 'int':
+    case 'number': {
       const n = Number(value);
-      if (!Number.isInteger(n)) return 'Enter a whole number.';
+      if (def.kind === 'int' ? !Number.isInteger(n) : !Number.isFinite(n))
+        return def.kind === 'int' ? 'Enter a whole number.' : 'Enter a number.';
       if (def.min !== undefined && n < def.min) return `Must be at least ${def.min}.`;
       if (def.max !== undefined && n > def.max) return `Must be at most ${def.max}.`;
       return null;
@@ -216,7 +219,13 @@ export async function saveChanges(
     }
     throw err;
   }
+  // A value equal to the built-in default is not stored (or is removed), so improved defaults in
+  // a later release still apply to settings nobody changed.
   const list = Object.entries(all)
+    .map(([k, v]): [string, string | null] => [
+      k,
+      v !== null && !isSecretSetting(k) && v === defaultValue(k) ? null : v,
+    ])
     .filter(([k, v]) => (v === null ? k in state.saved.values : state.saved.values[k] !== v))
     .map(([key, value]) => ({ key, value }));
   await saveSettings(db.db, list, actor, box);

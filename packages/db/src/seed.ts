@@ -1,5 +1,6 @@
 import { sql } from 'drizzle-orm';
-import { divisions, sites } from './schema';
+import { divisions, seasonPeriods, sites } from './schema';
+import { SEED_SEASONS } from './repo/calendar';
 import type { Db } from './client';
 import { SEED_DIVISIONS, SEED_SITES } from './seed-data';
 
@@ -18,6 +19,9 @@ export async function seedReferenceData(
       .values(SEED_DIVISIONS)
       .onConflictDoNothing()
       .returning({ code: divisions.code });
+    // Season calendar: only on a fresh install, so admin edits/deletions are never undone.
+    const [seasonCount] = await tx.select({ n: sql<number>`count(*)::int` }).from(seasonPeriods);
+    if ((seasonCount?.n ?? 0) === 0) await tx.insert(seasonPeriods).values(SEED_SEASONS);
     if (opts.sites === 'if-empty') {
       const [row] = await tx.select({ n: sql<number>`count(*)::int` }).from(sites);
       if ((row?.n ?? 0) > 0) return { divisions: d.length, sites: 0 };

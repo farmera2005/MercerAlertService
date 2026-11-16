@@ -242,6 +242,40 @@ importers:
         specifier: ~5.9.3
         version: 5.9.3
 
+  tools/simulator:
+    dependencies:
+      '@mercer/core':
+        specifier: workspace:*
+        version: link:../../packages/core
+      '@mercer/db':
+        specifier: workspace:*
+        version: link:../../packages/db
+      '@mercer/mock-swis':
+        specifier: workspace:*
+        version: link:../mock-swis
+      '@mercer/worker':
+        specifier: workspace:*
+        version: link:../../apps/worker
+      drizzle-orm:
+        specifier: ^0.45.4
+        version: 0.45.4(@opentelemetry/api@1.10.0)(@types/pg@8.23.1)(pg@8.23.1)
+      pg:
+        specifier: ^8.23.1
+        version: 8.23.1
+    devDependencies:
+      '@types/node':
+        specifier: ^22.19.0
+        version: 22.20.5
+      '@types/pg':
+        specifier: ^8.23.1
+        version: 8.23.1
+      tsx:
+        specifier: ^4.23.15
+        version: 4.23.15
+      typescript:
+        specifier: ~5.9.3
+        version: 5.9.3
+
 packages:
 
   '@alloc/quick-lru@5.3.0':

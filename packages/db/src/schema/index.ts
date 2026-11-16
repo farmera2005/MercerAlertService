@@ -4,3 +4,4 @@ export * from './mirror';
 export * from './history';
 export * from './ops';
 export * from './auth';
+export * from './incidents';

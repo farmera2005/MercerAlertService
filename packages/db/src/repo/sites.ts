@@ -3,6 +3,7 @@ import { slugify, type DivisionRef, type NodeOverride, type SiteRef } from '@mer
 import { divisions, nodeSiteOverrides, sites } from '../schema';
 import type { Db, DbOrTx } from '../client';
 import { writeAudit } from './audit';
+import { inSequence } from './helpers';
 
 export interface SiteContextData {
   sites: SiteRef[];
@@ -11,7 +12,7 @@ export interface SiteContextData {
 }
 
 export async function loadSiteContextData(db: DbOrTx): Promise<SiteContextData> {
-  const [siteRows, divRows, ovRows] = await Promise.all([
+  const [siteRows, divRows, ovRows] = await inSequence([
     db
       .select({
         id: sites.id,

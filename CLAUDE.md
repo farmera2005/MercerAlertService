@@ -17,7 +17,8 @@ pnpm dev:worker              # worker with tsx watch
 pnpm dev:web                 # Next.js on :3000 → setup wizard (setup code is printed in its log)
 pnpm test:e2e                # Playwright against a fresh stack (needs E2E_SETUP_CODE, see README)
 pnpm lint && pnpm typecheck && pnpm test   # must pass before every commit
-pnpm test:integration        # needs DATABASE_URL_TEST (a throwaway database)
+pnpm test:integration        # needs DATABASE_URL_TEST (a throwaway database); includes the storm simulator
+pnpm simulate                # storm scenarios with a readable report (SIMULATOR_DATABASE_URL, wiped)
 pnpm db:generate             # after editing packages/db/src/schema/* → new SQL migration
 pnpm swis:discover           # list entities/fields/custom properties on a real Orion
 docker compose up -d         # full stack, no .env needed; add --profile dev for mock-swis
@@ -83,6 +84,9 @@ docker compose up -d         # full stack, no .env needed; add --profile dev for
   `poller_state` or `notifications`.
 - **Naming:** files use `kebab-case.ts`, types use `PascalCase`, DB columns use
   `snake_case`, and TS fields use `camelCase`. Queue names are dotted (`swis.poll.alerts`).
+- **Correlation changes** must keep `pnpm simulate` green. If a change alters an expected
+  outcome on purpose, update `tools/simulator/src/scenarios.ts` and the table in
+  architecture §7 in the same commit.
 - **Tests:** Vitest, colocated as `*.test.ts`. Integration tests are `*.int.test.ts` and
   are skipped unless `DATABASE_URL_TEST` is set. Correlation, scoring, guardrails and
   routing changes need tests. Scenario tests in `tools/simulator` assert incident counts,

@@ -9,7 +9,17 @@
 import type { ConfigKey } from './env';
 
 export type SettingKind =
-  'text' | 'host' | 'url' | 'int' | 'bool' | 'secret' | 'pem' | 'timezone' | 'regex' | 'cron';
+  | 'text'
+  | 'host'
+  | 'url'
+  | 'int'
+  | 'number'
+  | 'bool'
+  | 'secret'
+  | 'pem'
+  | 'timezone'
+  | 'regex'
+  | 'cron';
 
 export const SETTING_SECTIONS = {
   general: {
@@ -40,6 +50,16 @@ export const SETTING_SECTIONS = {
   retention: {
     title: 'Data retention',
     description: 'How long history is kept before the nightly purge.',
+  },
+  correlation: {
+    title: 'Correlation',
+    description:
+      'How raw alerts are grouped into incidents, when incidents resolve, and what counts as flapping.',
+  },
+  scoring: {
+    title: 'Priority scoring',
+    description:
+      'score = Orion severity × what is affected × site tier × season × time of day. P1–P3 are thresholds on that score.',
   },
   health: {
     title: 'Self-monitoring',
@@ -339,6 +359,111 @@ export const SETTINGS: readonly SettingDef[] = [
     kind: 'cron',
     advanced: true,
     help: 'Takes effect after the worker restarts.',
+  }),
+
+  // correlation
+  s({
+    key: 'CORRELATION_WINDOW_SEC',
+    section: 'correlation',
+    label: 'Group alerts at the same site within (seconds)',
+    kind: 'int',
+    min: 30,
+  }),
+  s({
+    key: 'RESOLVE_HOLDDOWN_SEC',
+    section: 'correlation',
+    label: 'Auto-resolve after all alerts clear for (seconds)',
+    kind: 'int',
+    min: 0,
+  }),
+  s({
+    key: 'REOPEN_WINDOW_SEC',
+    section: 'correlation',
+    label: 'Reopen instead of a new incident within (seconds)',
+    kind: 'int',
+    min: 0,
+  }),
+  s({
+    key: 'FLAP_COUNT',
+    section: 'correlation',
+    label: 'Flapping: state changes…',
+    kind: 'int',
+    min: 2,
+  }),
+  s({
+    key: 'FLAP_WINDOW_MIN',
+    section: 'correlation',
+    label: '…within (minutes)',
+    kind: 'int',
+    min: 1,
+  }),
+  s({
+    key: 'UPS_ALERT_REGEX',
+    section: 'correlation',
+    label: 'UPS / power alert names (regex)',
+    kind: 'regex',
+    advanced: true,
+  }),
+  s({
+    key: 'CORRELATION_MAX_AGE_SEC',
+    section: 'correlation',
+    label: 'Ignore backlog older than (seconds)',
+    kind: 'int',
+    min: 60,
+    advanced: true,
+    help: 'After an upgrade or long outage, older state changes are not replayed; current Orion state is used instead.',
+  }),
+
+  // scoring
+  s({ key: 'SCORING_P1_MIN', section: 'scoring', label: 'P1 at score ≥', kind: 'int', min: 1 }),
+  s({ key: 'SCORING_P2_MIN', section: 'scoring', label: 'P2 at score ≥', kind: 'int', min: 1 }),
+  s({ key: 'SCORING_P3_MIN', section: 'scoring', label: 'P3 at score ≥', kind: 'int', min: 1 }),
+  s({
+    key: 'SCORING_TIER_CRITICAL',
+    section: 'scoring',
+    label: 'Critical-tier site multiplier',
+    kind: 'number',
+    min: 0.5,
+    max: 3,
+  }),
+  s({
+    key: 'SCORING_TIER_HIGH',
+    section: 'scoring',
+    label: 'High-tier site multiplier',
+    kind: 'number',
+    min: 0.5,
+    max: 3,
+  }),
+  s({
+    key: 'SCORING_HARVEST_GRAIN_MULT',
+    section: 'scoring',
+    label: 'Harvest multiplier for grain sites that are not harvest-critical',
+    kind: 'number',
+    min: 1,
+    max: 3,
+    help: 'Harvest-critical sites use the multiplier on the Harvest season (Settings → Seasons).',
+  }),
+  s({
+    key: 'SCORING_AFTER_HOURS_MULT',
+    section: 'scoring',
+    label: 'Outside business hours multiplier',
+    kind: 'number',
+    min: 0.1,
+    max: 1,
+  }),
+  s({
+    key: 'RECOVERY_TARGET_HARVEST_MIN',
+    section: 'scoring',
+    label: 'Recovery target, harvest-critical site in harvest (minutes)',
+    kind: 'int',
+    min: 15,
+  }),
+  s({
+    key: 'RECOVERY_TARGET_DEFAULT_MIN',
+    section: 'scoring',
+    label: 'Recovery target, otherwise (minutes)',
+    kind: 'int',
+    min: 15,
   }),
 
   // health

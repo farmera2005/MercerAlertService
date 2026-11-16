@@ -24,7 +24,8 @@
     "dev:web": "pnpm --filter @mercer/web run dev",
     "swis:discover": "tsx scripts/swis-discover.ts",
     "swis:record": "tsx scripts/swis-record.ts",
-    "test:e2e": "pnpm --filter @mercer/web test:e2e"
+    "test:e2e": "pnpm --filter @mercer/web test:e2e",
+    "simulate": "pnpm --filter @mercer/simulator simulate"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

@@ -4,6 +4,8 @@ import { resolveFileEnv, SECRET_ENV_PREFIXES } from './file-env';
 const bool = (def: boolean) => z.stringbool().default(def);
 const int = (def: number, min = 0) => z.coerce.number().int().min(min).default(def);
 const str = (def: string) => z.string().default(def);
+const num = (def: number, min: number, max: number) =>
+  z.coerce.number().min(min).max(max).default(def);
 
 /** Raw env schema (flat, as written in .env / compose). Defaults are the documented placeholders. */
 export const envSchema = z.object({
@@ -72,6 +74,27 @@ export const envSchema = z.object({
   // --- Web ---
   HEALTH_WORKER_STALE_SEC: int(60, 10),
 
+  // --- Correlation ---
+  CORRELATION_WINDOW_SEC: int(180, 30),
+  RESOLVE_HOLDDOWN_SEC: int(300, 0),
+  REOPEN_WINDOW_SEC: int(900, 0),
+  FLAP_COUNT: int(4, 2),
+  FLAP_WINDOW_MIN: int(20, 1),
+  /** Pending transitions older than this (e.g. after an upgrade or long outage) are not replayed. */
+  CORRELATION_MAX_AGE_SEC: int(3600, 60),
+  UPS_ALERT_REGEX: str('battery|utility power|on bypass|\\bups\\b'),
+
+  // --- Priority scoring ---
+  SCORING_P1_MIN: int(70, 1),
+  SCORING_P2_MIN: int(50, 1),
+  SCORING_P3_MIN: int(30, 1),
+  SCORING_TIER_CRITICAL: num(1.4, 0.5, 3),
+  SCORING_TIER_HIGH: num(1.2, 0.5, 3),
+  SCORING_HARVEST_GRAIN_MULT: num(1.2, 1, 3),
+  SCORING_AFTER_HOURS_MULT: num(0.8, 0.1, 1),
+  RECOVERY_TARGET_HARVEST_MIN: int(240, 15),
+  RECOVERY_TARGET_DEFAULT_MIN: int(480, 15),
+
   // --- Bootstrap / security ---
   /** 32-byte base64 key that encrypts secrets stored in the database. Usually MAS_MASTER_KEY_FILE. */
   MAS_MASTER_KEY: z.string().optional(),
@@ -136,6 +159,26 @@ export interface AppConfig {
   };
   worker: { healthPort: number; heartbeatSec: number; deadmanPingUrl?: string };
   web: { workerStaleSec: number };
+  correlation: {
+    windowSec: number;
+    holddownSec: number;
+    reopenWindowSec: number;
+    flapCount: number;
+    flapWindowMin: number;
+    maxAgeSec: number;
+    upsAlertRegex: string;
+  };
+  scoring: {
+    p1Min: number;
+    p2Min: number;
+    p3Min: number;
+    tierCritical: number;
+    tierHigh: number;
+    harvestGrainMult: number;
+    afterHoursMult: number;
+    recoveryHarvestMin: number;
+    recoveryDefaultMin: number;
+  };
   setupComplete: boolean;
   /** Which keys came from the environment (and are therefore locked in the web UI). */
   envKeys: ReadonlySet<string>;
@@ -217,6 +260,18 @@ export function loadConfig(
       throw err;
     }
   }
+  if (!(e.SCORING_P1_MIN > e.SCORING_P2_MIN && e.SCORING_P2_MIN > e.SCORING_P3_MIN)) {
+    const err = new ConfigError('Priority thresholds must satisfy P1 > P2 > P3');
+    err.issues = [{ key: 'SCORING_P2_MIN', message: 'P1 > P2 > P3 is required' }];
+    throw err;
+  }
+  try {
+    new RegExp(e.UPS_ALERT_REGEX, 'i');
+  } catch {
+    const err = new ConfigError('UPS_ALERT_REGEX is not a valid regular expression');
+    err.issues = [{ key: 'UPS_ALERT_REGEX', message: 'not a valid regular expression' }];
+    throw err;
+  }
   const baseUrl = (e.SWIS_BASE_URL ?? `https://${e.SWIS_HOST}:${e.SWIS_PORT}`).replace(/\/+$/, '');
 
   return {
@@ -279,6 +334,26 @@ export function loadConfig(
       deadmanPingUrl: e.DEADMAN_PING_URL,
     },
     web: { workerStaleSec: e.HEALTH_WORKER_STALE_SEC },
+    correlation: {
+      windowSec: e.CORRELATION_WINDOW_SEC,
+      holddownSec: e.RESOLVE_HOLDDOWN_SEC,
+      reopenWindowSec: e.REOPEN_WINDOW_SEC,
+      flapCount: e.FLAP_COUNT,
+      flapWindowMin: e.FLAP_WINDOW_MIN,
+      maxAgeSec: e.CORRELATION_MAX_AGE_SEC,
+      upsAlertRegex: e.UPS_ALERT_REGEX,
+    },
+    scoring: {
+      p1Min: e.SCORING_P1_MIN,
+      p2Min: e.SCORING_P2_MIN,
+      p3Min: e.SCORING_P3_MIN,
+      tierCritical: e.SCORING_TIER_CRITICAL,
+      tierHigh: e.SCORING_TIER_HIGH,
+      harvestGrainMult: e.SCORING_HARVEST_GRAIN_MULT,
+      afterHoursMult: e.SCORING_AFTER_HOURS_MULT,
+      recoveryHarvestMin: e.RECOVERY_TARGET_HARVEST_MIN,
+      recoveryDefaultMin: e.RECOVERY_TARGET_DEFAULT_MIN,
+    },
     setupComplete: e.MAS_SETUP_COMPLETE,
     envKeys,
   };

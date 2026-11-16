@@ -19,8 +19,8 @@ Design docs: [architecture](docs/architecture.md) · [database schema](docs/sche
 | ---------------- | ---------------------------------------------------------------------------------------------------------------------------------- | -------- |
 | 1. Foundation    | Repo, Docker Compose, schema and migrations, SWIS client, discovery and recorder scripts, mock SWIS, polling into Postgres, health | **Done** |
 | 1b. Online setup | Browser setup wizard and Settings: no config files, encrypted secrets, live reload                                                 | **Done** |
-| 2. Correlation   | Dedupe, topology suppression, flap detection, incident lifecycle, simulator                                                        | Next     |
-| 3. Dashboard v1  | Entra SSO, overview, incidents, site and node pages, SSE, wall display                                                             |          |
+| 2. Correlation   | Dedupe, topology suppression, flap detection, incident lifecycle, priority scoring, seasons, maintenance, simulator                | **Done** |
+| 3. Dashboard v1  | Entra SSO, overview, incidents, site and node pages, SSE, wall display                                                             | Next     |
 | 4. Notifications | Teams cards, Twilio/Pushover, on-call and escalation, shadow mode                                                                  |          |
 | 5. AI            | Summaries, severity suggestion with guardrails, digests, budget, fallbacks                                                         |          |
 | 6. Polish        | Ask the network, trends, admin, hardening                                                                                          |          |
@@ -59,6 +59,15 @@ Then open `http://<vm>:3000` in a browser. The **setup wizard** asks for:
 5. **General.** Time zone, dashboard URL, poll intervals and retention. The defaults are fine.
 6. **Finish.** A checklist confirms the worker, the connection, discovery and sites. Click
    **Start monitoring** and polling begins within seconds.
+
+After setup, the home page shows open incidents by priority, the **noise-reduction ratio**
+(raw alerts per incident) and each incident's summary and priority explanation.
+**Settings** has tabs for:
+
+- correlation and priority (with live examples of what the thresholds produce)
+- the **season calendar**: harvest Sept 1 – Dec 15, plus optional wheat-harvest and spring
+  application periods
+- **maintenance windows**: one-off or weekly, for a site, a device or everything
 
 Everything can be changed later under **Settings**. Changes reach the worker within a
 second, with no restart.
@@ -275,7 +284,9 @@ backup you took before the upgrade.
 
 ```bash
 pnpm lint && pnpm typecheck && pnpm test      # unit tests (no DB)
-DATABASE_URL_TEST=postgres://mas:mas@localhost:5432/mas_test pnpm test:integration
+DATABASE_URL_TEST=postgres://mas:mas@localhost:5432/mas_test pnpm test:integration   # includes the storm scenarios
+SIMULATOR_DATABASE_URL=postgres://mas:mas@localhost:5432/mas_sim pnpm simulate     # readable report; wipes that DB
+pnpm simulate wan-down-harvest flapping-ap                                          # selected scenarios
 pnpm db:generate     # after editing packages/db/src/schema/*; commit the generated SQL
 pnpm swis:record --rows 200 --hash-hostnames  # capture sanitized real fixtures
 pnpm dev:mock-swis -- --replay fixtures/swis/recorded
@@ -289,10 +300,12 @@ Repository layout:
 ```
 apps/web          Next.js (App Router): setup wizard, Settings, dashboard, API, SSE, /wall
 apps/worker       pg-boss scheduler, SWIS pollers, setup jobs, health server (+ init/migrate/discover)
-packages/core     config + settings registry, encryption, logger, Orion vocabulary, mapping, diffing
+packages/core     config + settings registry, encryption, logger, Orion vocabulary, mapping, diffing,
+                  correlation engine, priority scoring + AI guardrail (all pure, unit-tested)
 packages/db       Drizzle schema, migrations, repositories, seed data
 packages/swis     SWIS client, SWQL catalog, schema probe, discovery, fixture sanitizer
 tools/mock-swis   mock SWIS server, synthetic Mercer-like world, storm scenarios
+tools/simulator   replays storms through the real pipeline on a virtual clock and checks the incidents
 scripts/          swis-discover.ts, swis-record.ts
 docker/           Dockerfile, backup sidecar
 ```

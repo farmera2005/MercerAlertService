@@ -135,11 +135,13 @@ export function SettingField({
       );
       break;
     case 'int':
+    case 'number':
       input = (
         <Input
           {...common}
           type="number"
-          inputMode="numeric"
+          inputMode={f.kind === 'int' ? 'numeric' : 'decimal'}
+          step={f.kind === 'int' ? 1 : 0.05}
           min={f.min}
           max={f.max}
           placeholder={f.placeholder}

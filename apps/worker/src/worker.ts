@@ -25,6 +25,12 @@ import {
 } from '@mercer/db';
 import { SchemaProbe, SwisClient, SwisFetcher } from '@mercer/swis';
 import type { WorkerContext } from './context';
+import {
+  CORRELATE_QUEUE,
+  CORRELATE_TICK_SEC,
+  runCorrelationCycle,
+  type CycleSummary,
+} from './correlation';
 import { POLLERS } from './pollers';
 import { runPoll } from './pollers/run-poll';
 import { POLL_EXPIRE_SEC, POLL_QUEUES, RETENTION_QUEUE } from './queues';
@@ -53,6 +59,8 @@ export interface Worker {
   reloadConfig(): Promise<void>;
   /** Run a poller inline (tests, CLI). Returns null when not configured or on failure. */
   pollOnce(name: PollerName): ReturnType<typeof runPoll>;
+  /** Run one correlation cycle inline (tests, simulator). */
+  correlateOnce(opts?: { reconcile?: boolean }): Promise<CycleSummary | null>;
   health(): Promise<{ ok: boolean; details: Record<string, unknown> }>;
 }
 
@@ -112,6 +120,9 @@ export function createWorker(bootstrap: AppConfig, opts: WorkerOptions = {}): Wo
   let fingerprint = '';
   let reloadTimer: NodeJS.Timeout | null = null;
   let reloading: Promise<void> | null = null;
+  /** Align alert records with the mirror once per monitoring start (upgrades, long gaps). */
+  let reconcileDue = false;
+  let monitoringSince: Date | null = null;
 
   const monitoringWanted = (c: AppConfig) =>
     isSwisConfigured(c.swis) &&
@@ -164,7 +175,11 @@ export function createWorker(bootstrap: AppConfig, opts: WorkerOptions = {}): Wo
       sites,
       source: runtime.source,
       onTransitions: async () => {
-        /* M2: enqueue correlate.run */
+        await boss
+          ?.send(CORRELATE_QUEUE, {})
+          .catch((e: unknown) =>
+            log.error({ err: errorMessage(e) }, 'could not enqueue correlation'),
+          );
       },
       now,
     };
@@ -178,7 +193,8 @@ export function createWorker(bootstrap: AppConfig, opts: WorkerOptions = {}): Wo
     clearPollTimers();
     if (!boss || mode !== 'monitoring') return;
     // Topology first: it refreshes the schema probe and custom-property list.
-    const order: PollerName[] = ['topology', 'alerts', 'nodes', 'interfaces', 'events'];
+    // Nodes before alerts, so the first correlation already knows sites and device roles.
+    const order: PollerName[] = ['topology', 'nodes', 'alerts', 'interfaces', 'events'];
     order.forEach((name, i) => {
       const queue = POLL_QUEUES[name];
       const enqueue = () => {
@@ -190,6 +206,37 @@ export function createWorker(bootstrap: AppConfig, opts: WorkerOptions = {}): Wo
       pollTimers.push(setTimeout(enqueue, i * 1500));
       pollTimers.push(setInterval(enqueue, cfg.swis.pollSec[name] * 1000));
     });
+    // Lifecycle timers (hold-down, reopen window, snoozes, maintenance) need a heartbeat of their own.
+    pollTimers.push(
+      setInterval(() => {
+        if (!stopping && mode === 'monitoring') {
+          boss
+            ?.send(CORRELATE_QUEUE, {})
+            .catch((e: unknown) =>
+              log.error({ err: errorMessage(e) }, 'could not enqueue correlation'),
+            );
+        }
+      }, CORRELATE_TICK_SEC * 1000),
+    );
+  }
+
+  /** The mirror is trustworthy for reconcile once alerts and nodes have both been polled since start. */
+  async function mirrorFresh(): Promise<boolean> {
+    if (!monitoringSince) return false;
+    const r = await dbh.pool.query<{ n: number }>(
+      `select count(*)::int as n from poller_state where poller in ('alerts','nodes') and last_success_at >= $1`,
+      [monitoringSince],
+    );
+    return (r.rows[0]?.n ?? 0) === 2;
+  }
+
+  async function correlateOnce(opts: { reconcile?: boolean } = {}): Promise<CycleSummary | null> {
+    const c = ctx;
+    if (!c) return null;
+    const reconcile = opts.reconcile ?? (reconcileDue && (await mirrorFresh()));
+    const summary = await runCorrelationCycle(c, { reconcile });
+    if (reconcile) reconcileDue = false;
+    return summary;
   }
 
   /** Apply a new config: rebuild the SWIS runtime / site resolver / tickers only where it changed. */
@@ -219,9 +266,11 @@ export function createWorker(bootstrap: AppConfig, opts: WorkerOptions = {}): Wo
     ctx = makeCtx();
     mode = runtime && monitoringWanted(next) ? 'monitoring' : 'awaiting_setup';
     if (mode !== prevMode) {
-      if (mode === 'monitoring')
+      if (mode === 'monitoring') {
+        monitoringSince = now();
+        reconcileDue = true;
         log.info({ swis: next.swis.baseUrl, pollSec: next.swis.pollSec }, 'monitoring started');
-      else log.info('awaiting setup: finish the setup wizard in the web UI to start polling');
+      } else log.info('awaiting setup: finish the setup wizard in the web UI to start polling');
     }
     if (mode !== prevMode || pollKey(prev) !== pollKey(next)) {
       if (mode === prevMode && mode === 'monitoring')
@@ -347,6 +396,7 @@ export function createWorker(bootstrap: AppConfig, opts: WorkerOptions = {}): Wo
     box,
     pollOnce,
     reloadConfig,
+    correlateOnce,
 
     async start() {
       await reloadConfig();
@@ -405,6 +455,14 @@ export function createWorker(bootstrap: AppConfig, opts: WorkerOptions = {}): Wo
         setupHandler((i) => runDiscoverJob(i, cfg, box, dbh.db, setupLog)),
       );
 
+      await boss.createQueue(CORRELATE_QUEUE, {
+        policy: 'stately',
+        retryLimit: 1,
+        expireInSeconds: 600,
+      });
+      await boss.work(CORRELATE_QUEUE, { pollingIntervalSeconds: 1 }, async () => {
+        if (mode === 'monitoring') await correlateOnce();
+      });
       await boss.createQueue(RETENTION_QUEUE, {
         policy: 'singleton',
         retryLimit: 2,

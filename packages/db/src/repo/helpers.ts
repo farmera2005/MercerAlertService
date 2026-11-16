@@ -31,3 +31,16 @@ export function runningMax(tableName: string, column: string): SQL {
 }
 
 export const UPSERT_CHUNK = 500;
+
+/**
+ * Await lazy Drizzle queries one after another, typed like `Promise.all`. Inside a transaction
+ * everything shares one connection, so `Promise.all` gains nothing and stacks queries on a busy
+ * client, which pg 9 rejects.
+ */
+export async function inSequence<T extends readonly unknown[] | []>(
+  queries: T,
+): Promise<{ -readonly [P in keyof T]: Awaited<T[P]> }> {
+  const out: unknown[] = [];
+  for (const q of queries) out.push(await q);
+  return out as { -readonly [P in keyof T]: Awaited<T[P]> };
+}

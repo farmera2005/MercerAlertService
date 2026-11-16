@@ -9,3 +9,4 @@ export * from './mapping';
 export * from './time';
 export * from './util';
 export * from './ingest/diff';
+export * from './correlation';

@@ -145,22 +145,21 @@ active job per queue. A slow SWIS therefore can never pile up overlapping polls,
 several worker replicas cannot double-poll. Wall-clock jobs use pg-boss cron with the
 `America/New_York` time zone.
 
-| Queue                             | Trigger                                                                | Policy    | Milestone                        |
-| --------------------------------- | ---------------------------------------------------------------------- | --------- | -------------------------------- |
-| `swis.poll.alerts`                | every 30 s                                                             | stately   | M1                               |
-| `swis.poll.nodes`                 | every 60 s                                                             | stately   | M1                               |
-| `swis.poll.interfaces`            | every 180 s                                                            | stately   | M1                               |
-| `swis.poll.events`                | every 300 s                                                            | stately   | M1                               |
-| `swis.poll.topology`              | every 3600 s, and at startup                                           | stately   | M1                               |
-| `maint.retention`                 | cron `15 3 * * *` ET                                                   | singleton | M1                               |
-| `correlate.run`                   | after any poll that produced transitions, plus every 30 s              | stately   | M2                               |
-| `incident.lifecycle`              | every 30 s: hold-down auto-resolve, snooze expiry, maintenance windows | stately   | M2                               |
-| `notify.dispatch` / `notify.send` | on incident open or material change; retries with backoff              | standard  | M4                               |
-| `notify.escalate`                 | delayed job (`startAfter` = ack timeout)                               | standard  | M4                               |
-| `ai.incident.summary`             | debounced per incident (`singletonKey`, 45 s)                          | standard  | M5                               |
-| `ai.digest.daily`                 | cron `0 7 * * *` ET (configurable)                                     | singleton | M5                               |
-| `ai.digest.weekly`                | cron `30 7 * * 1` ET                                                   | singleton | M5                               |
-| `maint.selfcheck`                 | every 60 s: queue backlog, notifier health, SWIS errors                | stately   | M1 (heartbeat), M4 (self-alerts) |
+| Queue                             | Trigger                                                                                                             | Policy    | Milestone                        |
+| --------------------------------- | ------------------------------------------------------------------------------------------------------------------- | --------- | -------------------------------- |
+| `swis.poll.alerts`                | every 30 s                                                                                                          | stately   | M1                               |
+| `swis.poll.nodes`                 | every 60 s                                                                                                          | stately   | M1                               |
+| `swis.poll.interfaces`            | every 180 s                                                                                                         | stately   | M1                               |
+| `swis.poll.events`                | every 300 s                                                                                                         | stately   | M1                               |
+| `swis.poll.topology`              | every 3600 s, and at startup                                                                                        | stately   | M1                               |
+| `maint.retention`                 | cron `15 3 * * *` ET                                                                                                | singleton | M1                               |
+| `correlate.run`                   | after any poll that produced transitions, plus every 30 s (lifecycle: hold-down, reopen/close, snooze, maintenance) | stately   | M2 ✓                             |
+| `notify.dispatch` / `notify.send` | on incident open or material change; retries with backoff                                                           | standard  | M4                               |
+| `notify.escalate`                 | delayed job (`startAfter` = ack timeout)                                                                            | standard  | M4                               |
+| `ai.incident.summary`             | debounced per incident (`singletonKey`, 45 s)                                                                       | standard  | M5                               |
+| `ai.digest.daily`                 | cron `0 7 * * *` ET (configurable)                                                                                  | singleton | M5                               |
+| `ai.digest.weekly`                | cron `30 7 * * 1` ET                                                                                                | singleton | M5                               |
+| `maint.selfcheck`                 | every 60 s: queue backlog, notifier health, SWIS errors                                                             | stately   | M1 (heartbeat), M4 (self-alerts) |
 
 ## 5. SWIS integration
 
@@ -216,61 +215,96 @@ Three layers. Full schema: [schema.md](schema.md).
 All timestamps are `timestamptz` stored in UTC. Business logic (business hours, harvest
 season, digests) runs in `APP_TIMEZONE`, default `America/New_York`.
 
-## 7. Correlation & priority (M2/M3 design summary)
+## 7. Correlation & priority (implemented in M2)
 
-The pipeline runs over unprocessed transitions plus current mirror state:
+The engine (`packages/core/src/correlation`) is a pure function. The worker's
+`correlate.run` job loads a snapshot from Postgres, runs the engine, and persists the result
+in one transaction under an advisory lock. The snapshot holds pending transitions, the
+mirror, the topology graph, open and recently resolved incidents, active alert records,
+seasons, maintenance windows and recent flap history. The job runs after every poll that
+recorded changes, and every 30 s as the lifecycle tick.
 
-1. **Dedupe.** The key is `(AlertID, EntityUri)`. A re-trigger increments
-   `trigger_count` and updates `last_seen_at` on the same `alert_record`.
-2. **Flap detection.** If an entity has ≥ N state changes in M minutes (defaults 4 in 20),
-   it becomes, or joins, a single `flapping` incident. Its member alerts don't open
-   separate incidents.
-3. **Topology and dependency root cause.** If a node is down and it is the site's WAN
-   edge (role `firewall`) or an upstream parent, it becomes the root. The evidence comes,
-   in order, from Orion `Dependencies` (groups are expanded to members),
-   `TopologyConnections`, and Orion's own `Unreachable` (status 12) children. Downstream
-   nodes and interfaces become **symptoms** of that root incident. If none of that
-   evidence exists, we fall back to grouping by site.
-4. **Time-window grouping.** Alerts at the same site within `CORRELATION_WINDOW_SEC`
-   (default 180 s) join the open incident for that site.
-5. **Lifecycle.** `open → acknowledged → resolved → closed`. Resolution is automatic once
-   all member alerts have cleared for `RESOLVE_HOLDDOWN_SEC` (default 300 s). An incident
-   reopens if a member re-raises within the hold-down period or within
-   `REOPEN_WINDOW_SEC`. Snooze applies per incident. Maintenance windows apply per site or
-   node and suppress notifications, and optionally incident creation.
-6. **Noise ratio.** For any time window, `raw alert raises ÷ incidents opened`. It is
-   computed from `entity_transitions` and `incidents` and shown on the dashboard. This is
-   the main success metric.
+1. **Dedupe.** One `alert_record` per `(AlertID, EntityUri)`. A re-trigger increments
+   `trigger_count`. Orion node status adds `status:node:<id>` records: _down_ is critical,
+   and _unreachable_ is a symptom only. SWIS itself adds `internal:source:swis`.
+2. **Flapping.** A device or interface with at least `FLAP_COUNT` state changes in
+   `FLAP_WINDOW_MIN` becomes, or joins, one flapping incident. Consecutive changes in the same
+   direction count once, so a status change plus its "Node is down" alert is one change. A
+   flapping incident resolves after the device has been stable for the whole flap window.
+3. **Grouping.** A new problem joins an open incident if any of these holds:
+   - the incident is at the same site and was active within `CORRELATION_WINDOW_SEC`;
+   - the problem's upstream root is the root of an ongoing outage, at any site; or
+   - the problem has no site but is on the same node, within the window.
 
-**Priority** comes from a deterministic score. Every factor is stored in
-`incidents.priority_factors`, so the UI can explain it.
+   Otherwise a new incident opens. An old standing alert on a device never pulls a new storm
+   into its incident.
+
+4. **Root cause.** Walk upstream through down or unreachable parents. Parents come from Orion
+   dependencies (a parent group's members expanded) and from topology links, which are
+   oriented by device role. If neither exists, fall back to the site's down WAN-edge firewall.
+   A device with an active "node down" alert counts as down even before the next node poll.
+5. **Classification.**
+   - `site_outage`: the root is the site firewall, or every managed node at the site is down
+     or unreachable.
+   - `ups_power`: a UPS node is involved, or an alert name matches `UPS_ALERT_REGEX`.
+   - `device_down`, `interface`, `service` and `generic` cover the rest.
+   - `flapping` and `monitoring_source_down` are fixed by how the incident was formed.
+
+   Members get the role root, symptom or member. Titles and summaries come from
+   deterministic business-language templates, for example "Scales at Coldwater Elevator may be
+   offline".
+
+6. **Lifecycle.** `open → acknowledged → resolved → closed`.
+   - Auto-resolve after all members have been clear for `RESOLVE_HOLDDOWN_SEC`.
+   - Reopen if a member returns within `REOPEN_WINDOW_SEC`; close after that.
+   - Snooze expiry is handled on the lifecycle tick.
+   - A maintenance window that suppresses "notifications" sets `in_maintenance`. One that
+     suppresses "incidents" holds alerts back until the window ends, then raises them if
+     they are still active.
+7. **Seeding and reconcile.** Alerts already active when MAS starts are marked `seeded`. They
+   don't count towards the noise ratio, and M4 won't page for them. Once per monitoring
+   start, after both alerts and nodes have been polled, records are reconciled against the
+   mirror. This also covers upgrades, because backlog older than `CORRELATION_MAX_AGE_SEC` is
+   skipped rather than replayed.
+8. **Noise ratio.** Raw Orion alert raises (excluding initial sync) ÷ non-seeded incidents
+   opened. The status page shows it for 24 h and 7 d.
+
+**Priority** comes from a deterministic score, and every factor is stored in
+`incidents.priority_factors`:
 
 ```
-base   = impact points + Orion severity points
-         impact: site_outage 50 · core_device 35 · multi_device 25 · single_device 15
-                 · interface 10 · informational 5
-         severity: Critical 20 · Serious 15 · Warning 8 · Notice 3 · Informational 0
-score  = base × tier (Critical 1.4 · High 1.2 · Standard 1.0)
-              × season (harvest ∧ harvest-critical site 1.5 · harvest ∧ grain division 1.2
-                        · custom high-risk period: per-period multiplier)
-              × time (outside site business hours 0.8, never applied to site outages or
-                      firewall-down at harvest-critical sites during harvest)
-P1 ≥ 70 · P2 ≥ 50 · P3 ≥ 30 · else P4        (weights and thresholds are editable in Admin)
+score = impact points × Orion severity × site tier × season × time of day
+  impact:   whole site 70 · firewall / core switch / scale system 50 · router 45 · server 40
+            · power/UPS 40 · interface on a core device 40 · switch 35 · AP 25 · other interface 20
+            · several devices = worst + 10 (max 60)
+  severity: critical 1.0 · serious 0.85 · warning 0.6 · notice 0.4 · informational 0.25
+  tier:     critical 1.4 · high 1.2 · standard 1.0                        (Settings → Correlation)
+  season:   harvest at a harvest-critical site → Harvest multiplier (1.5); harvest at other grain
+            sites 1.2; other periods by division                         (Settings → Seasons)
+  time:     outside the site's business hours (harvest hours in harvest) 0.8 — not applied to
+            site outages / firewall down at harvest-critical sites during harvest
+P1 ≥ 70 · P2 ≥ 50 · P3 ≥ 30 · else P4; "Monitoring source down" is always P1.
 ```
 
-Worked examples. A harvest-critical, Critical-tier grain elevator whose FortiGate is down
-in October scores (50+20)×1.4×1.5 = 147, which is **P1**. A Standard-tier grain site down
-after hours in March scores 70×0.8 = 56, which is **P2**. A single AP warning scores
-23, which is **P4**. The same AP at a harvest-critical site during harvest scores 34.5,
-which is **P3**.
+Settings → Correlation shows live examples computed from the saved settings. The simulator
+(`pnpm simulate`) asserts these outcomes end to end:
 
-The **recovery target** is shown on each incident and drives escalation urgency. It is
-4 h for harvest-critical sites during harvest and 8 h otherwise.
+| Scenario                                                    | Result                                                                       |
+| ----------------------------------------------------------- | ---------------------------------------------------------------------------- |
+| Rockford FortiGate down with 30 child alerts, October 10:00 | **1** site outage, **P1**, 31 alerts, resolved after recovery, 31:1          |
+| Same outage in March at 22:00                               | **1** site outage, **P2**                                                    |
+| Flapping AP (6 bounces in 6 min)                            | **1** flapping incident, **P3**                                              |
+| UPS on battery at Coldwater in harvest                      | **1** power incident, **P2**                                                 |
+| HQ WAN link ramps to 98 %                                   | **1** interface incident, **P3**                                             |
+| SWIS returns 503 for 5 min                                  | **1** "SolarWinds monitoring unavailable", **P1**, resolved after it returns |
 
-**AI severity guardrail.** Claude can propose ±1 level, with a reason that is stored and
-displayed. The final priority is clamped. AI can never lower a whole-site outage, a
-firewall-down alert, or any harvest-critical site during harvest below **P2**, and the
-code enforces this after the model responds. "Monitoring source down" is always P1.
+The **recovery target** is shown on each incident: 4 h for harvest-critical sites during
+harvest, 8 h otherwise.
+
+**AI severity guardrail** (`applyAiAdjustment`, already unit-tested). Claude can propose ±1
+level, with a reason that is stored and displayed. AI can never lower a whole-site outage, a
+firewall-down incident, or any harvest-critical site during harvest below **P2**. If such an
+incident is already below P2, AI can't lower it at all. Monitoring-source-down is fixed.
 
 ## 8. AI layer (M5 design summary)
 
