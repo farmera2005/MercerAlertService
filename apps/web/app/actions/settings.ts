@@ -136,6 +136,8 @@ function siteFromForm(form: FormData) {
     state: text('state'),
     lat: num('lat'),
     lon: num('lon'),
+    mapX: num('mapX'),
+    mapY: num('mapY'),
     tier: (['critical', 'high', 'standard'].includes(String(form.get('tier')))
       ? form.get('tier')
       : 'standard') as 'critical' | 'high' | 'standard',
@@ -156,6 +158,9 @@ function validateSite(s: ReturnType<typeof siteFromForm>): Record<string, string
     e.lat = 'Latitude between -90 and 90.';
   if (s.lon !== null && (!Number.isFinite(s.lon) || s.lon < -180 || s.lon > 180))
     e.lon = 'Longitude between -180 and 180.';
+  for (const k of ['mapX', 'mapY'] as const)
+    if (s[k] !== null && (!Number.isInteger(s[k]) || s[k]! < 0 || s[k]! > 20000))
+      e[k] = 'Whole pixels from the top-left corner of the map image.';
   return e;
 }
 

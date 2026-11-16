@@ -7,19 +7,29 @@ import {
   createSession,
   deleteSession,
   getSession,
+  getUser,
   touchSession,
   type LocalAccount,
 } from '@mercer/db';
 import { requestMeta } from './request';
 import { server } from './server';
+import { auth as entraSession, signOut as entraSignOut } from './sso';
 
 const COOKIE = 'mas_session';
 const IDLE_MS = 12 * 3600_000;
 const ABSOLUTE_MS = 7 * 86_400_000;
 
+/**
+ * Two ways in: Microsoft Entra ID (the IT team) and local administrator accounts (created by the
+ * setup wizard; break-glass when Entra is unavailable). Both end up as the same CurrentUser.
+ */
 export interface CurrentUser {
+  kind: 'local' | 'entra';
   id: number;
+  /** Shown in the header and in incident timelines ("Acknowledged by …"). */
   username: string;
+  /** Written to audit rows: local:<username> or entra:<email>. */
+  label: string;
   isAdmin: boolean;
 }
 
@@ -50,14 +60,20 @@ export async function startSession(account: LocalAccount): Promise<void> {
   });
 }
 
+/** End both kinds of session. */
 export async function endSession(): Promise<void> {
   const jar = await cookies();
   const token = jar.get(COOKIE)?.value;
   if (token) await deleteSession(server().db.db, sha256Hex(token));
   jar.delete(COOKIE);
+  try {
+    await entraSignOut({ redirect: false });
+  } catch {
+    // No Microsoft session (or sign-in not configured): nothing to end.
+  }
 }
 
-export async function currentUser(): Promise<CurrentUser | null> {
+async function localUser(): Promise<CurrentUser | null> {
   const token = (await cookies()).get(COOKIE)?.value;
   if (!token) return null;
   const id = sha256Hex(token);
@@ -67,16 +83,40 @@ export async function currentUser(): Promise<CurrentUser | null> {
   if (now - row.session.createdAt.getTime() > ABSOLUTE_MS) return null;
   if (now - row.session.lastSeenAt.getTime() > 5 * 60_000)
     await touchSession(server().db.db, id, new Date(now + IDLE_MS));
-  return { id: row.account.id, username: row.account.username, isAdmin: row.account.isAdmin };
+  return {
+    kind: 'local',
+    id: row.account.id,
+    username: row.account.username,
+    label: `local:${row.account.username}`,
+    isAdmin: row.account.isAdmin,
+  };
 }
 
-/**
- * For pages: redirect to /setup (fresh install) or /login when there is no admin session. The
- * return path is the requested URL (forwarded by proxy.ts), falling back to `fallback`.
- */
-export async function requireAdmin(fallback = '/'): Promise<CurrentUser> {
-  const user = await currentUser();
-  if (user?.isAdmin) return user;
+async function microsoftUser(): Promise<CurrentUser | null> {
+  let uid: number | undefined;
+  try {
+    uid = (await entraSession())?.uid;
+  } catch (err) {
+    server().log.debug({ err: (err as Error).message }, 'no Microsoft session');
+    return null;
+  }
+  if (!uid) return null;
+  const u = await getUser(server().db.db, uid);
+  if (!u || u.disabledAt) return null;
+  return {
+    kind: 'entra',
+    id: u.id,
+    username: u.name,
+    label: `entra:${u.email || u.name}`,
+    isAdmin: u.isAdmin,
+  };
+}
+
+export async function currentUser(): Promise<CurrentUser | null> {
+  return (await localUser()) ?? (await microsoftUser());
+}
+
+async function toLogin(fallback: string): Promise<never> {
   if ((await countActiveAccounts(server().db.db)) === 0) redirect('/setup');
   const requested = (await headers()).get('x-mas-path');
   const next =
@@ -84,16 +124,41 @@ export async function requireAdmin(fallback = '/'): Promise<CurrentUser> {
   redirect(`/login?next=${encodeURIComponent(next)}`);
 }
 
-/** For server actions: returns the audit actor or null (caller returns an error state). */
-export async function adminActor(): Promise<Actor | null> {
+/** For dashboard pages: anyone signed in. Redirects to /setup (fresh install) or /login. */
+export async function requireUser(fallback = '/'): Promise<CurrentUser> {
   const user = await currentUser();
-  if (!user?.isAdmin) return null;
+  if (user) return user;
+  return toLogin(fallback);
+}
+
+/** For Settings and the setup wizard: admins only. Signed-in non-admins see a 403 page. */
+export async function requireAdmin(fallback = '/'): Promise<CurrentUser> {
+  const user = await currentUser();
+  if (user?.isAdmin) return user;
+  if (user) redirect('/forbidden');
+  return toLogin(fallback);
+}
+
+async function actorFor(user: CurrentUser | null): Promise<(Actor & { display: string }) | null> {
+  if (!user) return null;
   const meta = await requestMeta();
   return {
     actorType: 'user',
-    actorId: String(user.id),
-    actorLabel: `local:${user.username}`,
+    actorId: `${user.kind}:${user.id}`,
+    actorLabel: user.label,
+    display: user.username,
     ip: meta.ip,
     userAgent: meta.userAgent,
   };
+}
+
+/** For server actions that change configuration: the audit actor, or null (not an admin). */
+export async function adminActor(): Promise<(Actor & { display: string }) | null> {
+  const user = await currentUser();
+  return actorFor(user?.isAdmin ? user : null);
+}
+
+/** For incident actions (ack, snooze, notes): any signed-in user. */
+export async function userActor(): Promise<(Actor & { display: string }) | null> {
+  return actorFor(await currentUser());
 }

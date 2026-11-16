@@ -51,14 +51,17 @@ data, so none of them blocks development. Answer them in any order. Where it say
 
 ## D. Identity, hosting & access
 
-| #   | Question                                                                                                  | Placeholder default                                              | Where to change                                  |
-| --- | --------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------- | ------------------------------------------------ |
-| D1  | Entra tenant ID, and who registers the app?                                                               | README steps                                                     | `AUTH_MICROSOFT_ENTRA_ID_*`                      |
-| D2  | Name and object ID of the **Entra security group** that may sign in? Should a separate admin group exist? | `SG-IT-NetMonitor`. Admins come from `BOOTSTRAP_ADMIN_EMAILS`    | `ENTRA_ALLOWED_GROUP_ID`, `ENTRA_ADMIN_GROUP_ID` |
-| D3  | Dashboard URL (used in Teams and SMS links) and its TLS: a reverse proxy with an internal certificate?    | `https://netmon.mercer.local` behind your existing reverse proxy | `APP_BASE_URL`                                   |
-| D4  | VM details: which outbound hosts are allowed through the firewall? (List in architecture §11.)            | All listed hosts are allowed                                     | Network team                                     |
-| D5  | Wall display: what device or browser, and which subnet or IP is it on (for the kiosk IP allowlist)?       | Chromium kiosk on the IT office VLAN                             | Admin → Kiosk tokens                             |
-| D6  | Backups: is a local volume enough, or should dumps be copied to a NAS or SMB share? What RPO?             | Nightly dump, 14 copies kept locally                             | `BACKUP_*`                                       |
+| #   | Question                                                                                                                        | Placeholder default                                                | Where to change                                            |
+| --- | ------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------ | ---------------------------------------------------------- |
+| D1  | Entra tenant ID, and who registers the app?                                                                                     | README steps                                                       | Settings → Sign-in                                         |
+| D2  | Name and object ID of the **Entra security group** that may sign in? Should a separate admin group exist?                       | `SG-IT-NetMonitor`. Admins come from an admin group or e-mail list | Settings → Sign-in                                         |
+| D3  | Dashboard URL (used in Teams and SMS links and the Entra redirect URI) and its TLS: a reverse proxy?                            | `https://netmon.mercer.local` behind your existing reverse proxy   | Settings → General (address, reverse proxy)                |
+| D4  | VM details: which outbound hosts are allowed through the firewall? (List in architecture §11.)                                  | All listed hosts are allowed                                       | Network team                                               |
+| D5  | Wall display: what device or browser, and which subnet or IP is it on (for the kiosk IP allowlist)?                             | Chromium kiosk on the IT office VLAN                               | Settings → Map & wall                                      |
+| D6  | Backups: is a local volume enough, or should dumps be copied to a NAS or SMB share? What RPO?                                   | Nightly dump, 14 copies kept locally                               | `BACKUP_*`                                                 |
+| D7  | Should non-admin members of the IT group be allowed to **resolve** incidents, or only acknowledge, snooze and add notes?        | Everyone in the group may resolve                                  | Ask for a change (it is one check in `planIncidentAction`) |
+| D8  | Does the VM have internet access for map tiles, or should the map use an offline image (e.g. a county map of the service area)? | OpenStreetMap tiles; site coordinates from the Site Profiles       | Settings → Map & wall, Settings → Sites                    |
+| D9  | Should the wall rotate faster or slower, or always stay on the incident list while a P1 is open?                                | 20 s per view, incidents first when any are open                   | Settings → Map & wall                                      |
 
 ## E. AI usage
 

@@ -103,12 +103,14 @@ export async function SitesContent() {
 
 export async function GeneralContent() {
   const state = await getSettingsState();
-  const sections = (['general', 'polling', 'retention', 'health'] as const).map((section) => ({
-    section,
-    title: SETTING_SECTIONS[section].title,
-    description: SETTING_SECTIONS[section].description,
-    fields: sectionFields(section, state),
-  }));
+  const sections = (['general', 'network', 'polling', 'retention', 'health'] as const).map(
+    (section) => ({
+      section,
+      title: SETTING_SECTIONS[section].title,
+      description: SETTING_SECTIONS[section].description,
+      fields: sectionFields(section, state),
+    }),
+  );
   return (
     <div className="space-y-6">
       <ConfigProblem error={state.configError} />

@@ -62,3 +62,54 @@ describe('loadConfig precedence', () => {
     expect(cfg.swis.caCertPem).toContain('BEGIN CERTIFICATE');
   });
 });
+
+describe('sign-in and map settings', () => {
+  const G = (n: number) => `00000000-0000-0000-0000-00000000000${n}`;
+  it('leaves Microsoft sign-in off until configured, then requires every field', () => {
+    expect(loadConfig({ DATABASE_URL: 'x' }).auth.entra).toBeNull();
+    try {
+      loadConfig({ DATABASE_URL: 'x' }, { ENTRA_CLIENT_ID: G(1) });
+      expect.fail('should throw');
+    } catch (err) {
+      expect((err as ConfigError).issues.map((i) => i.key).sort()).toEqual([
+        'ENTRA_ALLOWED_GROUP_ID',
+        'ENTRA_CLIENT_SECRET',
+        'ENTRA_TENANT_ID',
+      ]);
+    }
+    const cfg = loadConfig(
+      { DATABASE_URL: 'x' },
+      {
+        ENTRA_TENANT_ID: G(1),
+        ENTRA_CLIENT_ID: G(2),
+        ENTRA_CLIENT_SECRET: 's3cret',
+        ENTRA_ALLOWED_GROUP_ID: G(3),
+        BOOTSTRAP_ADMIN_EMAILS: 'Lead@X.com, it@x.com',
+      },
+    );
+    expect(cfg.auth.entra).toMatchObject({
+      allowedGroupId: G(3),
+      adminGroupId: '',
+      bootstrapAdminEmails: ['lead@x.com', 'it@x.com'],
+    });
+  });
+  it('rejects a group name where an Object ID is expected', () => {
+    expect(() =>
+      loadConfig(
+        { DATABASE_URL: 'x' },
+        {
+          ENTRA_TENANT_ID: G(1),
+          ENTRA_CLIENT_ID: G(2),
+          ENTRA_CLIENT_SECRET: 's',
+          ENTRA_ALLOWED_GROUP_ID: 'IT Team',
+        },
+      ),
+    ).toThrow(ConfigError);
+  });
+  it('requires {z}/{x}/{y} in a custom tile URL', () => {
+    expect(() =>
+      loadConfig({ DATABASE_URL: 'x' }, { MAP_TILE_URL: 'https://tiles.local/map.png' }),
+    ).toThrow(/MAP_TILE_URL/);
+    expect(loadConfig({ DATABASE_URL: 'x' }).map.mode).toBe('tiles');
+  });
+});

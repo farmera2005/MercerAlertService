@@ -19,7 +19,8 @@ export type SettingKind =
   | 'pem'
   | 'timezone'
   | 'regex'
-  | 'cron';
+  | 'cron'
+  | 'select';
 
 export const SETTING_SECTIONS = {
   general: {
@@ -61,6 +62,25 @@ export const SETTING_SECTIONS = {
     description:
       'score = Orion severity × what is affected × site tier × season × time of day. P1–P3 are thresholds on that score.',
   },
+  sso: {
+    title: 'Microsoft sign-in (Entra ID)',
+    description:
+      'Lets the IT team sign in with their Microsoft accounts. Only members of the allowed security group get in; local administrator accounts keep working as break-glass access.',
+  },
+  network: {
+    title: 'Reverse proxy',
+    description:
+      'Only needed when MAS sits behind a reverse proxy (nginx, IIS, a load balancer). Client addresses are used for audit rows and wall-display IP restrictions.',
+  },
+  map: {
+    title: 'Map',
+    description:
+      'The overview and wall map use OpenStreetMap tiles by default. Switch to an offline image when the server has no internet access.',
+  },
+  wall: {
+    title: 'Wall display',
+    description: 'How the NOC wall rotates between its views.',
+  },
   health: {
     title: 'Self-monitoring',
     description: 'Heartbeats and the external dead-man’s switch.',
@@ -81,6 +101,8 @@ export interface SettingDef {
   danger?: boolean;
   min?: number;
   max?: number;
+  /** For kind 'select'. */
+  options?: ReadonlyArray<{ value: string; label: string }>;
 }
 
 const s = (def: SettingDef) => def;
@@ -465,6 +487,111 @@ export const SETTINGS: readonly SettingDef[] = [
     kind: 'int',
     min: 15,
   }),
+
+  // sign-in
+  s({
+    key: 'ENTRA_TENANT_ID',
+    section: 'sso',
+    label: 'Directory (tenant) ID',
+    kind: 'text',
+    placeholder: '00000000-0000-0000-0000-000000000000',
+    help: 'Entra admin center → App registrations → your app → Overview.',
+  }),
+  s({
+    key: 'ENTRA_CLIENT_ID',
+    section: 'sso',
+    label: 'Application (client) ID',
+    kind: 'text',
+    placeholder: '00000000-0000-0000-0000-000000000000',
+  }),
+  s({
+    key: 'ENTRA_CLIENT_SECRET',
+    section: 'sso',
+    label: 'Client secret',
+    kind: 'secret',
+    help: 'The secret’s Value (not its ID), from Certificates & secrets.',
+  }),
+  s({
+    key: 'ENTRA_ALLOWED_GROUP_ID',
+    section: 'sso',
+    label: 'Allowed security group (Object ID)',
+    kind: 'text',
+    placeholder: '00000000-0000-0000-0000-000000000000',
+    help: 'Only members of this group can sign in.',
+  }),
+  s({
+    key: 'ENTRA_ADMIN_GROUP_ID',
+    section: 'sso',
+    label: 'Admin group (Object ID, optional)',
+    kind: 'text',
+    help: 'Members can change Settings. Everyone else in the allowed group can view, acknowledge and snooze.',
+  }),
+  s({
+    key: 'BOOTSTRAP_ADMIN_EMAILS',
+    section: 'sso',
+    label: 'Admin e-mail addresses (optional)',
+    kind: 'text',
+    placeholder: 'adam@example.com, it-lead@example.com',
+    help: 'Comma-separated. These people are admins even without the admin group (they must still be in the allowed group).',
+    advanced: true,
+  }),
+
+  // reverse proxy
+  s({
+    key: 'TRUST_PROXY',
+    section: 'network',
+    label: 'Behind a reverse proxy (trust X-Forwarded-For)',
+    kind: 'bool',
+    danger: true,
+    help: 'Turn on only if every request reaches MAS through your proxy; otherwise anyone can claim any address.',
+  }),
+  s({
+    key: 'TRUST_PROXY_HOPS',
+    section: 'network',
+    label: 'Number of proxies in front of MAS',
+    kind: 'int',
+    min: 1,
+    max: 5,
+    advanced: true,
+  }),
+
+  // map
+  s({
+    key: 'MAP_MODE',
+    section: 'map',
+    label: 'Map background',
+    kind: 'select',
+    options: [
+      { value: 'tiles', label: 'OpenStreetMap tiles (needs internet)' },
+      { value: 'image', label: 'Offline image (upload below)' },
+    ],
+  }),
+  s({
+    key: 'MAP_TILE_URL',
+    section: 'map',
+    label: 'Tile URL',
+    kind: 'text',
+    help: 'Any XYZ raster tile server, e.g. an internal tile cache.',
+    advanced: true,
+  }),
+  s({
+    key: 'MAP_ATTRIBUTION',
+    section: 'map',
+    label: 'Tile attribution',
+    kind: 'text',
+    advanced: true,
+  }),
+
+  // wall
+  s({
+    key: 'WALL_ROTATE_SEC',
+    section: 'wall',
+    label: 'Seconds per view',
+    kind: 'int',
+    min: 5,
+    max: 600,
+  }),
+  s({ key: 'WALL_SHOW_MAP', section: 'wall', label: 'Include the map view', kind: 'bool' }),
 
   // health
   s({

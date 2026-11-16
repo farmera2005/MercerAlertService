@@ -12,7 +12,7 @@ export default async function StepsLayout({ children }: { children: ReactNode })
   const state = await getSettingsState();
   if (state.cfg?.setupComplete) redirect('/settings');
   return (
-    <Shell user={user.username}>
+    <Shell user={user}>
       <h1 className="text-2xl font-semibold">Setup</h1>
       <p className="mt-1 text-sm text-slate-400">
         You can change everything later under Settings. Nothing is polled until you press “Start

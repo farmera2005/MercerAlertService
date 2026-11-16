@@ -31,6 +31,7 @@ export interface FieldState {
   danger?: boolean;
   min?: number;
   max?: number;
+  options?: ReadonlyArray<{ value: string; label: string }>;
   value: string;
   isSet: boolean;
   source: FieldSource;
@@ -72,6 +73,38 @@ export async function getSettingsState(): Promise<SettingsState> {
   }
 }
 
+const g = globalThis as unknown as {
+  __masSettings?: { at: number; state: Promise<SettingsState> };
+};
+
+/**
+ * Settings for hot paths (every request checks sign-in and the client IP). A few seconds stale at
+ * most; saving here or a `config` bus event (another web replica, the setup wizard) clears it.
+ */
+export function cachedSettingsState(maxAgeMs = 5000): Promise<SettingsState> {
+  const c = g.__masSettings;
+  if (c && Date.now() - c.at < maxAgeMs) return c.state;
+  const state = getSettingsState();
+  g.__masSettings = { at: Date.now(), state };
+  state.catch(() => {
+    if (g.__masSettings?.state === state) g.__masSettings = undefined;
+  });
+  return state;
+}
+
+export function invalidateSettingsCache(): void {
+  g.__masSettings = undefined;
+}
+
+/** Effective config for hot paths, falling back to environment-only config if saved settings are invalid. */
+export async function effectiveConfig(): Promise<AppConfig> {
+  try {
+    return (await cachedSettingsState()).cfg ?? server().bootstrap;
+  } catch {
+    return server().bootstrap;
+  }
+}
+
 export function fieldState(def: SettingDef, state: SettingsState): FieldState {
   const env = resolveFileEnv(process.env, (k) => k === def.key);
   const locked = state.envKeys.has(def.key);
@@ -89,6 +122,7 @@ export function fieldState(def: SettingDef, state: SettingsState): FieldState {
     danger: def.danger,
     min: def.min,
     max: def.max,
+    options: def.options,
     value: secret ? '' : raw,
     isSet: secret ? !!raw : raw !== '',
     source,
@@ -166,6 +200,8 @@ function validateKind(def: SettingDef, value: string): string | null {
       if (def.max !== undefined && n > def.max) return `Must be at most ${def.max}.`;
       return null;
     }
+    case 'select':
+      return def.options?.some((o) => o.value === value) ? null : 'Choose one of the options.';
     case 'cron':
       return value.trim().split(/\s+/).length === 5
         ? null
@@ -229,5 +265,6 @@ export async function saveChanges(
     .filter(([k, v]) => (v === null ? k in state.saved.values : state.saved.values[k] !== v))
     .map(([key, value]) => ({ key, value }));
   await saveSettings(db.db, list, actor, box);
+  invalidateSettingsCache();
   return { ok: true, message: list.length ? 'Saved.' : 'No changes.' };
 }

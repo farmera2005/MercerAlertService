@@ -134,6 +134,17 @@ export function SettingField({
         </Select>
       );
       break;
+    case 'select':
+      input = (
+        <Select {...common} {...valueProps}>
+          {(f.options ?? []).map((o) => (
+            <option key={o.value} value={o.value}>
+              {o.label}
+            </option>
+          ))}
+        </Select>
+      );
+      break;
     case 'int':
     case 'number':
       input = (

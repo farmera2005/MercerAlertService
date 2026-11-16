@@ -2,6 +2,7 @@ import {
   createCipheriv,
   createDecipheriv,
   createHash,
+  hkdfSync,
   randomBytes,
   randomInt,
   scrypt as scryptCb,
@@ -35,6 +36,16 @@ export class SecretBox {
     const cipher = createCipheriv('aes-256-gcm', this.key, iv);
     const ct = Buffer.concat([cipher.update(plaintext, 'utf8'), cipher.final()]);
     return 'v1:' + Buffer.concat([iv, cipher.getAuthTag(), ct]).toString('base64');
+  }
+
+  /**
+   * A stable secret for another purpose (e.g. the Auth.js session key), derived with HKDF so the
+   * master key itself is never handed out and no extra secret needs configuring.
+   */
+  deriveSecret(purpose: string): string {
+    return Buffer.from(
+      hkdfSync('sha256', this.key, Buffer.alloc(0), `mas:${purpose}`, 32),
+    ).toString('base64url');
   }
 
   open(sealed: string): string {

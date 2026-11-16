@@ -147,13 +147,14 @@ Indexes:
 
 ## 8. Auth & audit
 
-| Table            | M   | Key columns                                                                                                                                                                                                    |
-| ---------------- | --- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `users`          | 3   | `id serial`, `entra_oid UNIQUE`, `email`, `name`, `is_admin`, `last_login_at`                                                                                                                                  |
-| `local_accounts` | 1b  | `id serial`, `username UNIQUE`, `password_hash` (scrypt), `is_admin`, `created_at`, `last_login_at`, `disabled_at`. The first admin is created by the setup wizard; break-glass access after Entra SSO.        |
-| `web_sessions`   | 1b  | `id text PK` (SHA-256 of the cookie token), `account_id → local_accounts`, `created_at`, `last_seen_at`, `expires_at`, `ip`, `user_agent`. 12 h idle / 7 d absolute; purged nightly.                           |
-| `kiosk_tokens`   | 3   | `id`, `name`, `token_hash bytea UNIQUE` (SHA-256), `token_prefix` (first 6 characters, for display only), `allowed_cidrs text[]`, `created_by`, `expires_at?`, `revoked_at?`, `last_used_at?`, `last_used_ip?` |
-| `audit_log`      | 1   | `id bigserial`, `at`, `actor_type enum(user,kiosk,system)`, `actor_id?`, `actor_label`, `action`, `target_type`, `target_id`, `before jsonb?`, `after jsonb?`, `ip?`, `user_agent?`                            |
+| Table            | M   | Key columns                                                                                                                                                                                                                                                                                 |
+| ---------------- | --- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `users`          | 3 ✓ | `id serial`, `entra_oid UNIQUE`, `email`, `name`, `is_admin` (re-evaluated from groups at each sign-in), `created_at`, `last_login_at`, `disabled_at?`. Created at first Microsoft sign-in.                                                                                                 |
+| `local_accounts` | 1b  | `id serial`, `username UNIQUE`, `password_hash` (scrypt), `is_admin`, `created_at`, `last_login_at`, `disabled_at`. The first admin is created by the setup wizard; break-glass access after Entra SSO.                                                                                     |
+| `web_sessions`   | 1b  | `id text PK` (SHA-256 of the cookie token), `account_id → local_accounts`, `created_at`, `last_seen_at`, `expires_at`, `ip`, `user_agent`. 12 h idle / 7 d absolute; purged nightly.                                                                                                        |
+| `kiosk_tokens`   | 3 ✓ | `id`, `name`, `token_hash text UNIQUE` (SHA-256 hex), `token_prefix` (first 6 characters, for display only), `allowed_cidrs text[]`, `created_by`, `created_at`, `rotated_at?`, `expires_at?`, `revoked_at?`, `revoked_by?`, `last_used_at?` (updated at most every 5 min), `last_used_ip?` |
+| `setting_assets` | 3 ✓ | `key text PK` (`map.image`), `content_type`, `data bytea` (≤ 5 MB), `width`, `height`, `sha256` (ETag), `updated_by`, `updated_at`. Uploaded files that belong to settings: the offline map background.                                                                                     |
+| `audit_log`      | 1   | `id bigserial`, `at`, `actor_type enum(user,kiosk,system)`, `actor_id?`, `actor_label`, `action`, `target_type`, `target_id`, `before jsonb?`, `after jsonb?`, `ip?`, `user_agent?`                                                                                                         |
 
 ## 9. Retention (`maint.retention`, nightly)
 

@@ -154,6 +154,7 @@ several worker replicas cannot double-poll. Wall-clock jobs use pg-boss cron wit
 | `swis.poll.topology`              | every 3600 s, and at startup                                                                                        | stately   | M1                               |
 | `maint.retention`                 | cron `15 3 * * *` ET                                                                                                | singleton | M1                               |
 | `correlate.run`                   | after any poll that produced transitions, plus every 30 s (lifecycle: hold-down, reopen/close, snooze, maintenance) | stately   | M2 ✓                             |
+| `swis.writeback.ack`              | when someone acknowledges in MAS and `SWIS_WRITEBACK_ENABLED` is on (2 retries)                                     | standard  | M3 ✓                             |
 | `notify.dispatch` / `notify.send` | on incident open or material change; retries with backoff                                                           | standard  | M4                               |
 | `notify.escalate`                 | delayed job (`startAfter` = ack timeout)                                                                            | standard  | M4                               |
 | `ai.incident.summary`             | debounced per incident (`singletonKey`, 45 s)                                                                       | standard  | M5                               |
@@ -360,26 +361,87 @@ Each task's model can be overridden with `AI_MODEL_<TASK>`.
   mode, every message is redirected to `TEAMS_SHADOW_WEBHOOK` and labeled `[SHADOW]`, and
   no SMS or push is sent unless `SHADOW_ALLOW_SMS=true`.
 
-## 10. Web, live updates and the wall
+## 10. Web, live updates and the wall (implemented in M3)
 
-- **Auth.** Auth.js with the Microsoft Entra ID provider. Sign-in is allowed only if the
-  token's `groups` claim contains `ENTRA_ALLOWED_GROUP_ID`. We recommend setting the app
-  registration to emit "groups assigned to the application" and turning on "assignment
-  required" in Entra, which avoids group overage. `is_admin` comes from
-  `ENTRA_ADMIN_GROUP_ID` or `BOOTSTRAP_ADMIN_EMAILS`.
-- **SSE.** Each web process holds one `LISTEN mas_events` connection and fans out to SSE
-  clients. The worker sends small `pg_notify` payloads, for example
-  `{t:"incident", id}` or `{t:"poll", poller}`, and clients refetch what changed. A
-  heartbeat comment goes out every 15 s.
-- **Wall `/wall/<token>`.** No SSO. The token is 256-bit random, stored as SHA-256, and
-  can be revoked or rotated, with a per-token CIDR allowlist. `X-Forwarded-For` is only
-  trusted when `TRUST_PROXY=true`. The wall is read-only, high-contrast and dark, and
-  rotates between the site grid, the map and active incidents. It shows only the AI title
-  and short summary. A "DATA STALE" banner appears when the worker heartbeat or the last
-  SWIS poll is older than its threshold.
-- **Map.** Leaflet with an OSM raster tile layer (`MAP_TILE_URL`). Set
-  `MAP_MODE=image` to use an offline image with `CRS.Simple` and per-site pixel
-  coordinates.
+**Pages.** Overview (`/`): P1–P4 counts, noise ratio, SolarWinds status and poll ages, a site
+tile per site grouped by division, the map and the open incidents. Incidents (`/incidents`):
+one row of filters (status, opened, priority, division, site, kind, search, `INC-123`),
+paged. Incident detail: summary, member alerts with their role, a merged timeline, timing and
+recovery target, the priority explanation, affected devices and interfaces, and actions. Sites
+(`/sites`, `/sites/<code>`): Site Profile, devices grouped as network / scale systems / servers /
+UPS, interfaces down or above 80 %, recent incidents. Devices (`/nodes/<id>`,
+`/interfaces/<id>`): status history and charts over 24 h / 7 d / 30 d. Settings adds
+**Sign-in**, **Map & wall** and a read-only **Audit log**.
+
+**Site colour** (`siteHealth()` in `packages/core/src/dashboard`): red for an open P1/P2, a site
+outage, the WAN firewall down or every device down; amber for any other open incident or a
+device down or in warning; blue in a maintenance window; grey with no monitored devices. The
+reason is printed under the tile, and every colour has an icon and a label.
+
+**Incident actions.** Acknowledge, un-acknowledge, snooze (30 min – 1 day), cancel snooze,
+resolve, and notes. The rules are a pure function (`planIncidentAction`); the repository applies
+them in one transaction that also takes the correlator's advisory lock, so a correlation run can
+never overwrite an acknowledgement it loaded a moment earlier. Each action writes the incident
+event, the audit row and a `pg_notify`. Resolving with alerts still active is allowed (the event
+says how many); if they clear and fire again the incident reopens within the reopen window.
+Acknowledging can also acknowledge the alerts in Orion (below).
+
+**Timeline.** `buildTimeline()` merges MAS's incident events, alert and status transitions for
+the member alerts, nodes and interfaces, the Orion event log for those nodes, and people's acks and
+notes from `Orion.AlertHistory`, in time order (at the same instant, Orion's fact comes before
+MAS's reaction). Each source can be hidden.
+
+**Auth.** Two ways in, one `CurrentUser`:
+
+- **Microsoft Entra ID** through Auth.js v5 (`next-auth@5.0.0-beta.32`, pinned). The Auth.js
+  configuration is built **per request from the saved settings**, so sign-in is set up in Settings
+  → Sign-in without a restart or config file. The session key is derived from the master key
+  (HKDF), and `AUTH_URL` follows `APP_BASE_URL`, so the redirect URI shown on that page is exactly
+  what Entra must have. Sign-in requires the `groups` claim to contain `ENTRA_ALLOWED_GROUP_ID`
+  (and the tenant to match). Admins come from `ENTRA_ADMIN_GROUP_ID` or `BOOTSTRAP_ADMIN_EMAILS`;
+  everyone else in the group can view, acknowledge, snooze, resolve and add notes. Group overage
+  is refused with an explanation. The stock provider's Microsoft Graph photo call is replaced
+  (it would fail sign-in on a VM that cannot reach Graph). People are kept in `users`; the JWT
+  cookie holds only their id, and a disabled user is refused at the next request.
+- **Local administrator accounts** from the setup wizard stay as break-glass access (collapsed
+  under the Microsoft button once SSO is on).
+
+**Client addresses.** Next.js keeps a client-supplied `X-Forwarded-For`, so without a proxy any
+client could claim any IP. `instrumentation.ts` wraps `http.Server#emit` at start-up so every
+request carries the socket address in a header that is always overwritten (`lib/peer-ip.ts`).
+With `TRUST_PROXY` on, the address is the entry **our** proxy appended (`TRUST_PROXY_HOPS` from
+the right), never the leftmost one. Audit rows and wall IP allowlists use this.
+
+**SSE.** Each web process holds one `LISTEN mas_events` connection (reconnecting with backoff,
+and telling clients to resync afterwards) and fans out to `/api/events`. Payloads are validated
+with Zod (`@mercer/core/events`) on both ends. Browsers refresh the page's server components,
+debounced (1.2 s, at most 4 s), on incident, source, config and poll-with-changes events, so a
+storm triggers a few refreshes, not one per alert. The worker also publishes a heartbeat event
+every 15 s; the browser uses heartbeats and poll events to show **DATA STALE** when the worker is
+silent past `HEALTH_WORKER_STALE_SEC`, SolarWinds has not been polled successfully for
+`SWIS_STALE_AFTER_SEC`, or the stream itself has been down for 30 s. Times are corrected for the
+browser's clock offset (a wall PC with a wrong clock still shows the right state).
+
+**Wall `/wall/<token>`.** No sign-in. Tokens are 256-bit random, stored as SHA-256 (only a
+6-character prefix is kept for display), shown once on creation or rotation, and can be revoked,
+given an expiry and limited to IP ranges. Every render and the SSE stream re-check the token
+(a revoked link goes blank within a minute); failed attempts are rate-limited per address; every
+failure shows the same message. Pages are `noindex`, `no-store` and `Referrer-Policy:
+strict-origin`, so the token never reaches a tile server. The wall rotates (`WALL_ROTATE_SEC`)
+between open incidents (P1 first), the site grid (problem sites as large tiles, the rest as a
+compact "N other sites OK" list) and the map; text is 28–44 px. It shows only titles and short
+summaries, with IP and MAC addresses stripped, and no buttons or links. It reloads itself every
+6 h.
+
+**Map.** Leaflet, loaded only in the browser. OpenStreetMap tiles by default (`MAP_TILE_URL`,
+any XYZ server); `MAP_MODE=image` uses an uploaded PNG/JPEG/WebP (Settings → Map & wall, stored in
+`setting_assets`) with `CRS.Simple` and each site's Map X/Y in pixels. Markers are coloured by
+site health, with a legend; on the wall, problem sites carry permanent name labels.
+
+**Orion write-back (optional).** With `SWIS_WRITEBACK_ENABLED` and a separate write-capable
+account, acknowledging in MAS queues `swis.writeback.ack`; the worker calls
+`Orion.AlertActive.Acknowledge` for the incident's active, not-yet-acknowledged Orion alerts and
+records the result on the timeline and in the audit log. The web app never calls SWIS.
 
 ## 10b. Configuration & first-run setup
 
@@ -423,7 +485,7 @@ sequenceDiagram
   an advisory lock.
 - **Local admin accounts** use scrypt, DB-backed sessions storing only SHA-256 token hashes,
   httpOnly cookies, a 12 h idle and 7 d absolute lifetime, and rate-limited sign-in. They are
-  the break-glass path once Entra ID SSO (M3) is configured, also from the UI.
+  the break-glass path once Entra ID SSO is configured, also from the UI.
 
 ## 11. Security & operations
 
@@ -443,20 +505,22 @@ sequenceDiagram
   watching the watcher closes the loop. `DEADMAN_PING_URL` is also available.
 - Logs are structured JSON (pino), with redaction of `authorization`, passwords and
   webhook URLs.
-- **Outbound hosts the VM needs:** Orion `:17774`, `api.anthropic.com`, the Teams Workflows
+- **Outbound hosts the VM needs:** Orion `:17774`, `login.microsoftonline.com` (sign-in), `api.anthropic.com`, the Teams Workflows
   host (`*.logic.azure.com` / `*.powerplatform.com`), `api.twilio.com`, `api.pushover.net`,
   and OSM tiles unless `MAP_MODE=image`.
 
 ## 12. Key decisions
 
-| Decision                                        | Why                                                                                                                                                                                                                                                                                                        |
-| ----------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Drizzle** over Prisma                         | SQL-first schema in TypeScript, shared by `web` and `worker`, with no query-engine binary, which keeps Docker images small. Migrations are plain, reviewable SQL. Time-series and `ON CONFLICT` upserts with running aggregates are easy to write. It also fits pg-boss, which lives in the same Postgres. |
-| **pg-boss** (no Redis)                          | It is already in Postgres. `stately` queues give non-overlapping polls, `singletonKey` debounces AI jobs, delayed jobs handle escalation, and cron with a time zone runs digests. One fewer service to run.                                                                                                |
-| Interval ticks + stately queues for polls       | pg-boss cron is minute-granular, but alerts need 30 s. Ticks enqueue, and the stately policy deduplicates across replicas.                                                                                                                                                                                 |
-| SSE over LISTEN/NOTIFY                          | Real-time without extra infrastructure. Payloads stay small, and clients refetch over normal authenticated routes.                                                                                                                                                                                         |
-| Structured outputs instead of forced tool calls | Current Claude models reject forced `tool_choice`. JSON-schema output plus Zod gives the same guarantee.                                                                                                                                                                                                   |
-| **Node 22+** (images use Node 24 LTS)           | Node 20 reached end of life in April 2026. pg-boss 12 and undici 8 require Node ≥ 22.                                                                                                                                                                                                                      |
-| TypeScript 5.9 (pinned)                         | TS 7 (the native compiler) isn't supported yet by typescript-eslint or Next tooling.                                                                                                                                                                                                                       |
-| Settings in the DB, encrypted (not `.env`)      | The requirement is set-up completely online with no config files. Secrets are sealed with a key that lives outside the DB, so a dump alone exposes nothing. Env vars still win for IaC.                                                                                                                    |
-| Leaflet over MapLibre                           | We only need raster OSM and an offline image overlay (`CRS.Simple`). It is lighter and simpler.                                                                                                                                                                                                            |
+| Decision                                           | Why                                                                                                                                                                                                                                                                                                        |
+| -------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Drizzle** over Prisma                            | SQL-first schema in TypeScript, shared by `web` and `worker`, with no query-engine binary, which keeps Docker images small. Migrations are plain, reviewable SQL. Time-series and `ON CONFLICT` upserts with running aggregates are easy to write. It also fits pg-boss, which lives in the same Postgres. |
+| **pg-boss** (no Redis)                             | It is already in Postgres. `stately` queues give non-overlapping polls, `singletonKey` debounces AI jobs, delayed jobs handle escalation, and cron with a time zone runs digests. One fewer service to run.                                                                                                |
+| Interval ticks + stately queues for polls          | pg-boss cron is minute-granular, but alerts need 30 s. Ticks enqueue, and the stately policy deduplicates across replicas.                                                                                                                                                                                 |
+| SSE over LISTEN/NOTIFY                             | Real-time without extra infrastructure. Payloads stay small, and clients refetch over normal authenticated routes.                                                                                                                                                                                         |
+| Structured outputs instead of forced tool calls    | Current Claude models reject forced `tool_choice`. JSON-schema output plus Zod gives the same guarantee.                                                                                                                                                                                                   |
+| **Node 22+** (images use Node 24 LTS)              | Node 20 reached end of life in April 2026. pg-boss 12 and undici 8 require Node ≥ 22.                                                                                                                                                                                                                      |
+| TypeScript 5.9 (pinned)                            | TS 7 (the native compiler) isn't supported yet by typescript-eslint or Next tooling.                                                                                                                                                                                                                       |
+| Settings in the DB, encrypted (not `.env`)         | The requirement is set-up completely online with no config files. Secrets are sealed with a key that lives outside the DB, so a dump alone exposes nothing. Env vars still win for IaC.                                                                                                                    |
+| Auth.js v5 (pinned beta) with a per-request config | v5 is the release built for the App Router, and its lazy configuration lets Microsoft sign-in be set up in the browser (settings in the DB, session key derived from the master key). v4 would need the client secret in an environment variable. Pinned exactly because it is still tagged beta.          |
+| Socket peer address via an `http.Server` hook      | Next.js keeps a client-supplied `X-Forwarded-For`, so without a proxy the real address is lost and IP allowlists would be spoofable. The hook is a few lines in `instrumentation.ts`, needs no custom server, and fails closed (no address) if it is ever not active.                                      |
+| Leaflet over MapLibre                              | We only need raster OSM and an offline image overlay (`CRS.Simple`). It is lighter and simpler.                                                                                                                                                                                                            |

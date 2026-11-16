@@ -15,7 +15,7 @@ pnpm db:seed                 # placeholder divisions/sites/seasons (idempotent)
 pnpm dev:mock-swis           # mock SWIS on :17774 (synthetic Mercer-like world)
 pnpm dev:worker              # worker with tsx watch
 pnpm dev:web                 # Next.js on :3000 → setup wizard (setup code is printed in its log)
-pnpm test:e2e                # Playwright against a fresh stack (needs E2E_SETUP_CODE, see README)
+pnpm test:e2e                # Playwright against a fresh stack with mock-swis (needs E2E_SETUP_CODE, see README)
 pnpm lint && pnpm typecheck && pnpm test   # must pass before every commit
 pnpm test:integration        # needs DATABASE_URL_TEST (a throwaway database); includes the storm simulator
 pnpm simulate                # storm scenarios with a readable report (SIMULATOR_DATABASE_URL, wiped)
@@ -94,6 +94,16 @@ docker compose up -d         # full stack, no .env needed; add --profile dev for
 - **UI:** Tailwind + shadcn/ui, dark theme by default, and wall views must be readable
   from across the room (≥ 28px body text, WCAG AA contrast). Charts use Recharts, and the
   map uses Leaflet.
+- **Client addresses** come only from `requestMeta()` / `metaFromHeaders()` in `apps/web/lib/request.ts`
+  (socket peer via `lib/peer-ip.ts`, proxy-aware with `TRUST_PROXY`). Never read
+  `X-Forwarded-For` yourself.
+- **Incident actions** by people go through `applyIncidentAction()` (`@mercer/db`): it takes the
+  correlator's advisory lock, writes the incident event and the audit row, and publishes the
+  change. Don't update `incidents` from the web app any other way.
+- **Client components** never import the `@mercer/core` root (it pulls in Node modules). Pass
+  plain data from the server component, or use the browser-safe `@mercer/core/events`.
+- **The wall** shows only titles, short summaries and site names: run text through
+  `stripAddresses()`, and add no buttons, links or admin details.
 - Keep comments for _why_, not _what_. Business terms ("scales at Rockford elevator")
   belong in prompts and templates, not hard-coded in logic. Use the site profile and
   role mapping for those.

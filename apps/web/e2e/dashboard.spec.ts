@@ -1,0 +1,120 @@
+import { expect, test, type Page } from '@playwright/test';
+
+/**
+ * Dashboard smoke tests: overview (with a live update), incident acknowledgement and the wall.
+ * Runs after setup.spec.ts (project dependency) against a stack with mock-swis; triggers a WAN
+ * outage at Rockford through the mock's control API.
+ */
+const admin = {
+  username: process.env.E2E_ADMIN_USER ?? 'e2e-admin',
+  password: process.env.E2E_ADMIN_PASSWORD ?? 'correct-horse-battery-staple',
+};
+const control = process.env.E2E_MOCK_CONTROL_URL ?? 'http://127.0.0.1:17774';
+
+test.describe.configure({ mode: 'serial' });
+
+async function signIn(page: Page) {
+  await page.goto('/login');
+  await page.fill('#username', admin.username);
+  await page.fill('#password', admin.password);
+  await page.getByRole('button', { name: 'Sign in' }).click();
+  await expect(page).not.toHaveURL(/\/login/);
+}
+
+test.afterAll(async () => {
+  await fetch(`${control}/__mock/reset`, { method: 'POST' }).catch(() => {});
+});
+
+test('overview shows sites and updates live when a site goes down', async ({ page }) => {
+  await signIn(page);
+  await page.goto('/');
+  const rockford = page.locator('[data-site="Rockford Elevator"]');
+  await expect(page.getByTestId('site-grid')).toBeVisible();
+  await expect(rockford).toBeVisible();
+  await expect(page.getByText('Live', { exact: true })).toBeVisible();
+  await page.evaluate(() => {
+    (window as unknown as { __samePage: boolean }).__samePage = true;
+  });
+
+  const res = await fetch(`${control}/__mock/scenario`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      name: 'site-wan-down',
+      params: { site: 'ROCK', childAlerts: 30 },
+      immediate: true,
+    }),
+  });
+  expect(res.ok).toBe(true);
+
+  // Poll → correlation → pg_notify → SSE → refresh, with no reload of the page.
+  await expect(rockford).toHaveAttribute('data-level', 'bad', { timeout: 120_000 });
+  await expect(page.getByTestId('count-P1')).toContainText('1');
+  await expect(page.getByTestId('noise-24h')).not.toHaveText('—');
+  expect(
+    await page.evaluate(() => (window as unknown as { __samePage?: boolean }).__samePage),
+  ).toBe(true);
+});
+
+test('an incident can be acknowledged and it is audited', async ({ page }) => {
+  await signIn(page);
+  await page.goto('/incidents?priority=P1');
+  await page.getByTestId('incident-rows').getByRole('link').first().click();
+  await expect(page.getByTestId('incident-title')).toHaveText('Site down — Rockford Elevator');
+  await expect(page.getByTestId('timeline')).toContainText('raised');
+
+  await page.locator('form[aria-label="Acknowledge"] input[name=text]').fill('e2e: on it');
+  await page.getByRole('button', { name: 'Acknowledge' }).click();
+  await expect(page.getByText(`Acknowledged by ${admin.username} at`)).toBeVisible();
+  await expect(page.getByTestId('timeline')).toContainText(
+    `Acknowledged by ${admin.username}: e2e: on it`,
+  );
+  await expect(page.getByRole('button', { name: 'Un-acknowledge' })).toBeVisible();
+
+  await page.goto('/settings/audit?action=incident.');
+  await expect(page.getByRole('cell', { name: 'incident.ack' }).first()).toBeVisible();
+});
+
+test('the wall shows a valid link without signing in and refuses others', async ({
+  page,
+  browser,
+}) => {
+  await signIn(page);
+  await page.goto('/settings/wall');
+  const seen = (await page.getByText('Your address as MAS sees it').innerText()).split(': ')[1]!;
+  expect(seen, 'the web process must see real client addresses').not.toBe('unknown');
+
+  async function createLink(name: string, cidrs: string): Promise<string> {
+    await page.goto('/settings/wall');
+    await page.fill('#knew-name', name);
+    await page.fill('#knew-cidrs', cidrs);
+    await page.getByRole('button', { name: 'Create wall link' }).click();
+    return new URL(await page.getByTestId('wall-url').innerText()).pathname;
+  }
+  const mine = await createLink('E2E TV', seen.includes(':') ? `${seen}/128` : `${seen}/32`);
+  const elsewhere = await createLink('E2E elsewhere', '10.255.255.0/24');
+
+  const kiosk = await browser.newContext(); // no session cookie
+  const wall = await kiosk.newPage();
+  await wall.goto(elsewhere);
+  await expect(wall.getByRole('heading', { name: 'This wall link is not valid' })).toBeVisible();
+
+  await wall.goto(mine);
+  await expect(wall.getByTestId('wall-view')).toHaveAttribute('data-view', 'incidents');
+  await expect(wall.getByTestId('wall-count-P1')).toContainText('1');
+  await expect(wall.getByTestId('wall-incident').first()).toContainText(
+    'Site down — Rockford Elevator',
+  );
+  await expect(wall.getByRole('button')).toHaveCount(0);
+  await expect(wall.getByRole('link')).toHaveCount(0);
+  await expect(wall.getByText(/\b10\.\d+\.\d+\.\d+\b/)).toHaveCount(0);
+
+  // Revoking takes effect at the next render.
+  await page.goto('/settings/wall');
+  page.once('dialog', (d) => void d.accept());
+  await page.getByTestId('kiosk-E2E TV').getByRole('button', { name: 'Revoke' }).click();
+  await expect(page.getByTestId('kiosk-E2E TV')).toContainText('revoked');
+  await wall.reload();
+  await expect(wall.getByRole('heading', { name: 'This wall link is not valid' })).toBeVisible();
+  await kiosk.close();
+});

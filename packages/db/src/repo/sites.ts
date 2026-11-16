@@ -108,6 +108,8 @@ export type SiteInput = Pick<
   | 'state'
   | 'lat'
   | 'lon'
+  | 'mapX'
+  | 'mapY'
   | 'tier'
   | 'harvestCritical'
   | 'aliases'

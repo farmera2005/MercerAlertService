@@ -5,7 +5,8 @@ import { defineConfig, devices } from '@playwright/test';
  *   docker compose --profile dev up -d --build
  *   E2E_SETUP_CODE=$(docker compose logs web | grep -o '"setupCode":"[^"]*"' | tail -1 | cut -d'"' -f4) \
  *     pnpm --filter @mercer/web test:e2e
- * The setup spec needs a FRESH install (no admin yet).
+ * The setup spec needs a FRESH install (no admin yet); the dashboard spec runs after it and drives
+ * mock-swis through its control API (E2E_MOCK_CONTROL_URL, default http://127.0.0.1:17774).
  */
 export default defineConfig({
   testDir: './e2e',
@@ -14,6 +15,10 @@ export default defineConfig({
   fullyParallel: false,
   workers: 1,
   reporter: [['list']],
+  projects: [
+    { name: 'setup', testMatch: /setup\.spec\.ts/ },
+    { name: 'dashboard', testMatch: /dashboard\.spec\.ts/, dependencies: ['setup'] },
+  ],
   use: {
     baseURL: process.env.E2E_BASE_URL ?? 'http://localhost:3000',
     trace: 'off',

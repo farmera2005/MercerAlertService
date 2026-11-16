@@ -8,6 +8,7 @@ import {
   isSwisConfigured,
   loadConfig,
   loadOrCreateMasterKey,
+  WRITEBACK_ACK_QUEUE,
   type AppConfig,
   type Logger,
   type SecretBox,
@@ -19,6 +20,7 @@ import {
   purgeExpired,
   purgeExpiredSessions,
   settingsFingerprint,
+  publishEvent,
   upsertHeartbeat,
   type DbHandle,
   type PollerName,
@@ -42,6 +44,7 @@ import {
   type ConnectionInput,
 } from './setup-jobs';
 import { SiteResolver } from './site-resolver';
+import { runWritebackAck } from './writeback';
 import { SourceMonitor } from './source-monitor';
 
 export type WorkerMode = 'awaiting_setup' | 'monitoring' | 'config_error';
@@ -360,6 +363,8 @@ export function createWorker(bootstrap: AppConfig, opts: WorkerOptions = {}): Wo
           backlog,
         },
       });
+      // Dashboards and the wall show DATA STALE when these stop arriving.
+      await publishEvent(dbh.db, { t: 'heartbeat', component: 'worker' });
       if (runtime && mode === 'monitoring') await runtime.source.evaluate();
       lastBeatOk = now();
       // Fallback change detection if NOTIFY was missed.
@@ -474,6 +479,15 @@ export function createWorker(bootstrap: AppConfig, opts: WorkerOptions = {}): Wo
         log.info({ purged }, 'retention purge complete');
       });
       await boss.schedule(RETENTION_QUEUE, cfg.retention.cron, {}, { tz: cfg.timezone });
+
+      await boss.createQueue(WRITEBACK_ACK_QUEUE, {
+        retryLimit: 2,
+        retryDelay: 15,
+        expireInSeconds: 300,
+      });
+      await boss.work(WRITEBACK_ACK_QUEUE, async ([job]) => {
+        if (job) return runWritebackAck(job.data, cfg, dbh.db, log);
+      });
 
       await listen();
       schedulePolls();

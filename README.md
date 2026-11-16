@@ -20,8 +20,8 @@ Design docs: [architecture](docs/architecture.md) · [database schema](docs/sche
 | 1. Foundation    | Repo, Docker Compose, schema and migrations, SWIS client, discovery and recorder scripts, mock SWIS, polling into Postgres, health | **Done** |
 | 1b. Online setup | Browser setup wizard and Settings: no config files, encrypted secrets, live reload                                                 | **Done** |
 | 2. Correlation   | Dedupe, topology suppression, flap detection, incident lifecycle, priority scoring, seasons, maintenance, simulator                | **Done** |
-| 3. Dashboard v1  | Entra SSO, overview, incidents, site and node pages, SSE, wall display                                                             | Next     |
-| 4. Notifications | Teams cards, Twilio/Pushover, on-call and escalation, shadow mode                                                                  |          |
+| 3. Dashboard v1  | Entra SSO, overview, incidents, site and node pages, SSE, wall display                                                             | **Done** |
+| 4. Notifications | Teams cards, Twilio/Pushover, on-call and escalation, shadow mode                                                                  | Next     |
 | 5. AI            | Summaries, severity suggestion with guardrails, digests, budget, fallbacks                                                         |          |
 | 6. Polish        | Ask the network, trends, admin, hardening                                                                                          |          |
 
@@ -33,8 +33,9 @@ Requirements:
 
 - Docker Engine with the Compose plugin v2.24 or newer.
 - Outbound TCP **17774** to the Orion server.
-- Outbound HTTPS to the hosts listed in [architecture §11](docs/architecture.md#11-security--operations).
-  Those hosts are needed from Milestone 4 on.
+- Outbound HTTPS to the hosts listed in [architecture §11](docs/architecture.md#11-security--operations):
+  `login.microsoftonline.com` for Microsoft sign-in and `tile.openstreetmap.org` for the map
+  (unless you use an offline map image); the rest are needed from Milestone 4 on.
 
 ```bash
 git clone <repo> /opt/mercer-alert-service && cd /opt/mercer-alert-service
@@ -46,7 +47,8 @@ Then open `http://<vm>:3000` in a browser. The **setup wizard** asks for:
 
 1. **The setup code and an administrator account.** The one-time code only appears in the
    server log, so someone who can merely reach port 3000 can't claim the installation. The
-   account is a local break-glass admin. Entra ID sign-in arrives in Milestone 3.
+   account is a local break-glass admin; the IT team signs in with Microsoft once Entra ID is
+   set up (below).
 2. **SolarWinds.** Enter the Orion server, the read-only account and its password. Click
    **Fetch certificate** and compare the thumbprint with the one on the Orion server. Click
    **Trust this certificate**, then **Test connection**, then **Save connection**.
@@ -60,14 +62,60 @@ Then open `http://<vm>:3000` in a browser. The **setup wizard** asks for:
 6. **Finish.** A checklist confirms the worker, the connection, discovery and sites. Click
    **Start monitoring** and polling begins within seconds.
 
-After setup, the home page shows open incidents by priority, the **noise-reduction ratio**
-(raw alerts per incident) and each incident's summary and priority explanation.
-**Settings** has tabs for:
+### Using the dashboard
 
-- correlation and priority (with live examples of what the thresholds produce)
-- the **season calendar**: harvest Sept 1 – Dec 15, plus optional wheat-harvest and spring
-  application periods
-- **maintenance windows**: one-off or weekly, for a site, a device or everything
+Everything updates by itself (Server-Sent Events); the dot next to your name says **Live**.
+
+- **Overview:** open incidents by priority, the **noise-reduction ratio** (raw Orion alerts per
+  incident), SolarWinds status and poll ages, every site as a green / amber / red tile grouped
+  by division (the reason is under each tile), and the map.
+- **Incidents:** filter by status, time, priority, division, site and kind, or search a title
+  or `INC-123`. Each incident shows its summary, the alerts it grouped, a timeline merging
+  Orion and MAS, why it has its priority, its recovery target, and buttons to **Acknowledge**,
+  **Snooze**, **Resolve** and add **notes**. Every action is in Settings → Audit log.
+- **Sites** and **devices:** Site Profile, devices (scale systems, servers and UPSes listed
+  separately), problem interfaces, and response time / loss / CPU / memory / utilisation
+  charts over 24 hours, 7 or 30 days.
+- A red **DATA STALE** bar appears if the worker stops reporting or SolarWinds has not been
+  polled successfully for a while.
+
+**Settings** (admins) has tabs for SolarWinds, mapping, sites, correlation and priority (with
+live examples), the **season calendar** (harvest Sept 1 – Dec 15, plus optional wheat-harvest
+and spring application periods), **maintenance windows** (one-off or weekly), **Sign-in**,
+**Map & wall**, General and the **Audit log**.
+
+### Microsoft sign-in (Entra ID)
+
+Settings → **Sign-in** shows the exact redirect URI and walks through the registration:
+
+1. In the Entra admin center, **App registrations → New registration**: single tenant, platform
+   **Web**, redirect URI `https://<dashboard address>/api/auth/callback/microsoft-entra-id`
+   (set the dashboard address in Settings → General first).
+2. **Certificates & secrets → New client secret**; note its expiry date.
+3. **Token configuration → Add groups claim**: security groups, _Group ID_ in the ID token.
+   Under Enterprise applications → the app, set **Assignment required** to Yes and assign the
+   IT group (and an admin group). This keeps the group list small (no "group overage").
+4. Paste the tenant ID, client ID, secret value and the group Object IDs into Settings →
+   Sign-in. The sign-in page then offers **Sign in with Microsoft**.
+
+Members of the allowed group can view everything and acknowledge, snooze, resolve and add
+notes. Settings is limited to the admin group (or the addresses in "Admin e-mail addresses").
+The local administrator from setup keeps working under "Local administrator sign-in".
+
+### NOC wall display
+
+Settings → **Map & wall → New wall link** creates a link like `https://<dashboard>/wall/<token>`
+for one screen, shown once. Open it in the TV's browser in kiosk / full-screen mode: no
+sign-in. Optionally limit it to the screen's address range (the page shows your address as
+MAS sees it), give it an expiry, and **Rotate** or **Revoke** it at any time. The wall rotates
+between open incidents, the sites and the map with large text, and never shows buttons, links
+or IP addresses.
+
+For a server without internet access, upload a map image under **Offline map image**, switch
+the map background to _Offline image_, and give each site a Map X/Y (pixels) in Settings → Sites.
+
+If MAS sits behind a reverse proxy (nginx, IIS), turn on **Behind a reverse proxy** in Settings
+→ General so audit rows and wall IP limits see real client addresses.
 
 Everything can be changed later under **Settings**. Changes reach the worker within a
 second, with no restart.
@@ -143,13 +191,17 @@ docker compose run --rm --no-deps -e SWIS_HOST=orion.mercer.local -e SWIS_USERNA
   -e SWIS_PASSWORD='…' worker node dist/discover.js --check-queries
 ```
 
-### Teams, Twilio/Pushover, Entra ID
+### Teams, Twilio/Pushover
 
-These are configured in the same Settings UI when their milestones land:
+These are configured in the same Settings UI in Milestone 4: Teams Workflows webhooks, Twilio
+(start A2P 10DLC registration early), Pushover and shadow mode.
 
-- Entra ID sign-in: Milestone 3
-- Teams Workflows webhooks, Twilio (start A2P 10DLC registration early), Pushover and
-  shadow mode: Milestone 4
+### Orion write-back (optional)
+
+To have **Acknowledge** in MAS also acknowledge the alerts in Orion, create a second Orion
+account that may acknowledge alerts, then in Settings → SolarWinds turn on write-back and
+enter that account. The worker calls `Orion.AlertActive.Acknowledge`; the result appears on the
+incident timeline and in the audit log.
 
 ---
 
@@ -290,7 +342,8 @@ pnpm simulate wan-down-harvest flapping-ap                                      
 pnpm db:generate     # after editing packages/db/src/schema/*; commit the generated SQL
 pnpm swis:record --rows 200 --hash-hostnames  # capture sanitized real fixtures
 pnpm dev:mock-swis -- --replay fixtures/swis/recorded
-# End-to-end (browser) test of the setup wizard against a FRESH stack:
+# End-to-end (browser) tests against a FRESH stack: setup wizard, then overview (live update),
+# incident acknowledgement and the wall. They drive mock-swis through its control API on :17774.
 docker compose --profile dev up -d --build
 E2E_SETUP_CODE=$(docker compose logs web | grep -o '"setupCode":"[^"]*"' | tail -1 | cut -d'"' -f4) pnpm test:e2e
 ```
@@ -298,10 +351,11 @@ E2E_SETUP_CODE=$(docker compose logs web | grep -o '"setupCode":"[^"]*"' | tail 
 Repository layout:
 
 ```
-apps/web          Next.js (App Router): setup wizard, Settings, dashboard, API, SSE, /wall
+apps/web          Next.js (App Router): setup wizard, Settings, dashboard, Entra sign-in, SSE, /wall
 apps/worker       pg-boss scheduler, SWIS pollers, setup jobs, health server (+ init/migrate/discover)
 packages/core     config + settings registry, encryption, logger, Orion vocabulary, mapping, diffing,
-                  correlation engine, priority scoring + AI guardrail (all pure, unit-tested)
+                  correlation engine, priority scoring + AI guardrail, site health, incident
+                  actions, timeline, sign-in rules (all pure, unit-tested)
 packages/db       Drizzle schema, migrations, repositories, seed data
 packages/swis     SWIS client, SWQL catalog, schema probe, discovery, fixture sanitizer
 tools/mock-swis   mock SWIS server, synthetic Mercer-like world, storm scenarios

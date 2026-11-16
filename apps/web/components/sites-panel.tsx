@@ -18,6 +18,8 @@ export interface SiteView {
   state: string | null;
   lat: number | null;
   lon: number | null;
+  mapX: number | null;
+  mapY: number | null;
   tier: 'critical' | 'high' | 'standard';
   harvestCritical: boolean;
   aliases: string[];
@@ -96,6 +98,32 @@ function SiteForm({
             inputMode="decimal"
             defaultValue={dv('lon', site?.lon)}
             placeholder="-84.5702"
+          />
+        </FieldShell>
+        <FieldShell
+          id={`${id}-mapX`}
+          label="Map X (offline map)"
+          error={e.mapX}
+          help="Only for an uploaded map image: pixels from the left edge."
+        >
+          <Input
+            id={`${id}-mapX`}
+            name="mapX"
+            inputMode="numeric"
+            defaultValue={dv('mapX', site?.mapX)}
+          />
+        </FieldShell>
+        <FieldShell
+          id={`${id}-mapY`}
+          label="Map Y (offline map)"
+          error={e.mapY}
+          help="Pixels from the top edge."
+        >
+          <Input
+            id={`${id}-mapY`}
+            name="mapY"
+            inputMode="numeric"
+            defaultValue={dv('mapY', site?.mapY)}
           />
         </FieldShell>
         <div className="sm:col-span-2">

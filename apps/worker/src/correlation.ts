@@ -1,4 +1,3 @@
-import { sql } from 'drizzle-orm';
 import {
   runCorrelation,
   type AppConfig,
@@ -9,6 +8,7 @@ import {
   buildReconcileTransitions,
   loadCorrelationSnapshot,
   loadPendingTransitions,
+  lockCorrelation,
   persistCorrelation,
   publishEvent,
   type Db,
@@ -17,7 +17,6 @@ import type { WorkerContext } from './context';
 
 export const CORRELATE_QUEUE = 'correlate.run';
 export const CORRELATE_TICK_SEC = 30;
-const LOCK_KEY = 4_204_202_603;
 const BATCH = 2000;
 
 export function correlationConfig(cfg: AppConfig): CorrelationConfig {
@@ -40,8 +39,8 @@ async function runOnce(
   extra: TransitionIn[] | 'reconcile' | null,
 ) {
   return db.transaction(async (tx) => {
-    // One correlator at a time, even with several worker replicas.
-    await tx.execute(sql`select pg_advisory_xact_lock(${LOCK_KEY})`);
+    // One correlator at a time (even with several worker replicas), and never during a user action.
+    await lockCorrelation(tx);
     const pending = extra === 'reconcile' ? [] : await loadPendingTransitions(tx, BATCH);
     const synthetic =
       extra === 'reconcile' ? await buildReconcileTransitions(tx, now) : (extra ?? []);

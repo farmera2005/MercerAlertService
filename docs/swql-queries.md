@@ -271,5 +271,11 @@ POST /SolarWinds/InformationService/v3/Json/Invoke/Orion.AlertActive/Acknowledge
 Body: [[<AlertObjectID>, …], "Acknowledged in MercerAlertService by <user> (INC-1042)"]
 ```
 
-This is only sent when `SWIS_WRITEBACK_ENABLED=true` and the separate
-`SWIS_WRITE_USERNAME` / `SWIS_WRITE_PASSWORD` are set. Every call is written to the audit log.
+Implemented in M3 (`apps/worker/src/writeback.ts`, queue `swis.writeback.ack`). It is only
+sent when `SWIS_WRITEBACK_ENABLED=true` and the separate `SWIS_WRITE_USERNAME` /
+`SWIS_WRITE_PASSWORD` are set, after someone acknowledges an incident in MAS. The IDs are the
+incident's member alerts that are still active and not yet acknowledged in Orion. The call is
+not retried by the client (pg-boss retries the job twice); every success is written to the
+audit log and every attempt to the incident timeline. The next alerts poll sees
+`Acknowledged = 1` and records an `acked` transition, so a second acknowledgement finds nothing
+to do.

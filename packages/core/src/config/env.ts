@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { isGuid, parseEmailList } from '../auth/entra';
 import { resolveFileEnv, SECRET_ENV_PREFIXES } from './file-env';
 
 const bool = (def: boolean) => z.stringbool().default(def);
@@ -73,6 +74,25 @@ export const envSchema = z.object({
 
   // --- Web ---
   HEALTH_WORKER_STALE_SEC: int(60, 10),
+  /** Believe X-Forwarded-For (from this many proxies, counted from the right). */
+  TRUST_PROXY: bool(false),
+  TRUST_PROXY_HOPS: int(1, 1),
+
+  // --- Sign-in (Microsoft Entra ID) ---
+  ENTRA_TENANT_ID: str(''),
+  ENTRA_CLIENT_ID: str(''),
+  ENTRA_CLIENT_SECRET: str(''),
+  ENTRA_ALLOWED_GROUP_ID: str(''),
+  ENTRA_ADMIN_GROUP_ID: str(''),
+  /** Comma-separated e-mail addresses that are admins even without the admin group. */
+  BOOTSTRAP_ADMIN_EMAILS: str(''),
+
+  // --- Map & wall display ---
+  MAP_MODE: z.enum(['tiles', 'image']).default('tiles'),
+  MAP_TILE_URL: str('https://tile.openstreetmap.org/{z}/{x}/{y}.png'),
+  MAP_ATTRIBUTION: str('© OpenStreetMap contributors'),
+  WALL_ROTATE_SEC: int(20, 5),
+  WALL_SHOW_MAP: bool(true),
 
   // --- Correlation ---
   CORRELATION_WINDOW_SEC: int(180, 30),
@@ -158,7 +178,20 @@ export interface AppConfig {
     cron: string;
   };
   worker: { healthPort: number; heartbeatSec: number; deadmanPingUrl?: string };
-  web: { workerStaleSec: number };
+  web: { workerStaleSec: number; trustProxy: boolean; trustProxyHops: number };
+  auth: {
+    /** Null until tenant, client, secret and allowed group are all set. */
+    entra: {
+      tenantId: string;
+      clientId: string;
+      clientSecret: string;
+      allowedGroupId: string;
+      adminGroupId: string;
+      bootstrapAdminEmails: string[];
+    } | null;
+  };
+  map: { mode: 'tiles' | 'image'; tileUrl: string; attribution: string };
+  wall: { rotateSec: number; showMap: boolean };
   correlation: {
     windowSec: number;
     holddownSec: number;
@@ -272,6 +305,49 @@ export function loadConfig(
     err.issues = [{ key: 'UPS_ALERT_REGEX', message: 'not a valid regular expression' }];
     throw err;
   }
+  const entraFields = [
+    e.ENTRA_TENANT_ID,
+    e.ENTRA_CLIENT_ID,
+    e.ENTRA_CLIENT_SECRET,
+    e.ENTRA_ALLOWED_GROUP_ID,
+  ];
+  if (entraFields.some(Boolean)) {
+    const issues: ConfigIssue[] = [];
+    if (!e.ENTRA_TENANT_ID)
+      issues.push({ key: 'ENTRA_TENANT_ID', message: 'required for Microsoft sign-in' });
+    else if (!isGuid(e.ENTRA_TENANT_ID) && !/^[a-z0-9-]+(\.[a-z0-9-]+)+$/i.test(e.ENTRA_TENANT_ID))
+      issues.push({ key: 'ENTRA_TENANT_ID', message: 'use the Directory (tenant) ID, a GUID' });
+    if (!e.ENTRA_CLIENT_ID)
+      issues.push({ key: 'ENTRA_CLIENT_ID', message: 'required for Microsoft sign-in' });
+    else if (!isGuid(e.ENTRA_CLIENT_ID))
+      issues.push({ key: 'ENTRA_CLIENT_ID', message: 'use the Application (client) ID, a GUID' });
+    if (!e.ENTRA_CLIENT_SECRET)
+      issues.push({ key: 'ENTRA_CLIENT_SECRET', message: 'required for Microsoft sign-in' });
+    if (!e.ENTRA_ALLOWED_GROUP_ID)
+      issues.push({
+        key: 'ENTRA_ALLOWED_GROUP_ID',
+        message: 'required: only this group may sign in',
+      });
+    else if (!isGuid(e.ENTRA_ALLOWED_GROUP_ID))
+      issues.push({ key: 'ENTRA_ALLOWED_GROUP_ID', message: 'use the group’s Object ID, a GUID' });
+    if (e.ENTRA_ADMIN_GROUP_ID && !isGuid(e.ENTRA_ADMIN_GROUP_ID))
+      issues.push({ key: 'ENTRA_ADMIN_GROUP_ID', message: 'use the group’s Object ID, a GUID' });
+    if (issues.length) {
+      const err = new ConfigError(
+        `Microsoft sign-in settings are incomplete: ${issues.map((i) => i.key).join(', ')}`,
+      );
+      err.issues = issues;
+      throw err;
+    }
+  }
+  if (
+    !/^https?:\/\//.test(e.MAP_TILE_URL) ||
+    !['{z}', '{x}', '{y}'].every((p) => e.MAP_TILE_URL.includes(p))
+  ) {
+    const err = new ConfigError('MAP_TILE_URL must be an http(s) URL containing {z}, {x} and {y}');
+    err.issues = [{ key: 'MAP_TILE_URL', message: 'an http(s) URL with {z}, {x} and {y}' }];
+    throw err;
+  }
   const baseUrl = (e.SWIS_BASE_URL ?? `https://${e.SWIS_HOST}:${e.SWIS_PORT}`).replace(/\/+$/, '');
 
   return {
@@ -333,7 +409,25 @@ export function loadConfig(
       heartbeatSec: e.WORKER_HEARTBEAT_SEC,
       deadmanPingUrl: e.DEADMAN_PING_URL,
     },
-    web: { workerStaleSec: e.HEALTH_WORKER_STALE_SEC },
+    web: {
+      workerStaleSec: e.HEALTH_WORKER_STALE_SEC,
+      trustProxy: e.TRUST_PROXY,
+      trustProxyHops: e.TRUST_PROXY_HOPS,
+    },
+    auth: {
+      entra: e.ENTRA_CLIENT_ID
+        ? {
+            tenantId: e.ENTRA_TENANT_ID,
+            clientId: e.ENTRA_CLIENT_ID,
+            clientSecret: e.ENTRA_CLIENT_SECRET,
+            allowedGroupId: e.ENTRA_ALLOWED_GROUP_ID,
+            adminGroupId: e.ENTRA_ADMIN_GROUP_ID,
+            bootstrapAdminEmails: parseEmailList(e.BOOTSTRAP_ADMIN_EMAILS),
+          }
+        : null,
+    },
+    map: { mode: e.MAP_MODE, tileUrl: e.MAP_TILE_URL, attribution: e.MAP_ATTRIBUTION },
+    wall: { rotateSec: e.WALL_ROTATE_SEC, showMap: e.WALL_SHOW_MAP },
     correlation: {
       windowSec: e.CORRELATION_WINDOW_SEC,
       holddownSec: e.RESOLVE_HOLDDOWN_SEC,

@@ -76,7 +76,10 @@ export const SETTINGS_TABS = [
   { href: '/settings/correlation', label: 'Correlation & priority' },
   { href: '/settings/seasons', label: 'Seasons' },
   { href: '/settings/maintenance', label: 'Maintenance' },
+  { href: '/settings/sign-in', label: 'Sign-in' },
+  { href: '/settings/wall', label: 'Map & wall' },
   { href: '/settings/general', label: 'General' },
+  { href: '/settings/audit', label: 'Audit log' },
 ] as const;
 
 export function SettingsTabs() {

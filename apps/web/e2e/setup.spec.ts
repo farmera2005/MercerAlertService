@@ -76,14 +76,16 @@ test('first-run setup is completed entirely in the browser', async ({ page }) =>
   await expect(page).toHaveURL(/\/setup\/finish$/);
   await page.getByRole('button', { name: /Start monitoring/ }).click();
   await expect(page).toHaveURL(/welcome=1/);
-  await expect(async () => {
-    await page.reload();
-    await expect(page.locator('tbody tr')).toHaveCount(5);
-  }).toPass({ timeout: 60_000 });
+  await expect(page.getByText('Monitoring started')).toBeVisible();
 
-  // Health reports a configured, polling system.
-  const health = await (await page.request.get('/api/health')).json();
-  expect(health.worker.mode).toBe('monitoring');
+  // Health reports a configured system whose five pollers have all succeeded.
+  await expect(async () => {
+    const health = await (await page.request.get('/api/health')).json();
+    expect(health.worker.mode).toBe('monitoring');
+    expect(
+      (health.pollers as Array<{ lastSuccessAt: string | null }>).filter((p) => p.lastSuccessAt),
+    ).toHaveLength(5);
+  }).toPass({ timeout: 90_000 });
 });
 
 test('settings require sign-in and the wizard is closed after setup', async ({ page }) => {

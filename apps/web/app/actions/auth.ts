@@ -10,6 +10,8 @@ import {
 } from '@mercer/db';
 import { INTERNAL_SETTING_KEYS } from '@mercer/core';
 import { endSession, startSession } from '@/lib/auth';
+import { effectiveConfig } from '@/lib/settings';
+import { ENTRA_PROVIDER_ID, signIn } from '@/lib/sso';
 import { rateLimit, requestMeta } from '@/lib/request';
 import { server } from '@/lib/server';
 import { checkSetupCode } from '@/lib/setup-code';
@@ -22,6 +24,11 @@ export interface AuthFormState {
 }
 
 const USERNAME_RE = /^[A-Za-z0-9._@-]{3,64}$/;
+
+const safeNext = (v: unknown) => {
+  const s = typeof v === 'string' ? v : '/';
+  return s.startsWith('/') && !s.startsWith('//') ? s : '/';
+};
 
 export async function claimSetupAction(_: AuthFormState, form: FormData): Promise<AuthFormState> {
   const meta = await requestMeta();
@@ -80,13 +87,20 @@ export async function loginAction(_: AuthFormState, form: FormData): Promise<Aut
   await startSession(account);
   await writeAudit(db.db, {
     actorType: 'user',
-    actorId: String(account.id),
+    actorId: `local:${account.id}`,
     actorLabel: `local:${account.username}`,
     action: 'auth.login',
     ip: meta.ip,
     userAgent: meta.userAgent,
   });
-  redirect(next.startsWith('/') && !next.startsWith('//') ? next : '/');
+  redirect(safeNext(next));
+}
+
+/** Start the Microsoft Entra ID sign-in (redirects to login.microsoftonline.com). */
+export async function microsoftSignInAction(form: FormData): Promise<void> {
+  const cfg = await effectiveConfig();
+  if (!cfg.auth.entra) redirect('/login?error=not_configured');
+  await signIn(ENTRA_PROVIDER_ID, { redirectTo: safeNext(form.get('next')) });
 }
 
 export async function logoutAction(): Promise<void> {

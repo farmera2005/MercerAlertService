@@ -1,224 +1,190 @@
 import Link from 'next/link';
 import { redirect } from 'next/navigation';
-import { listIncidents, noiseStats, openIncidentCounts } from '@mercer/db';
+import { noiseStats } from '@mercer/db';
+import { IncidentRows } from '@/components/incident-rows';
+import { PollAgo } from '@/components/live';
 import { Shell } from '@/components/shell';
-import { Alert, Badge, Card } from '@/components/ui';
-import { server } from '@/lib/server';
-import { requireAdmin } from '@/lib/auth';
+import { SiteGrid } from '@/components/site-grid';
+import { SiteMap } from '@/components/site-map';
+import { LevelIcon, PRIORITY, PriorityBadge } from '@/components/status';
+import { Alert, Card } from '@/components/ui';
+import { requireUser } from '@/lib/auth';
 import { getHealth } from '@/lib/health';
+import { mapConfig } from '@/lib/map';
+import { overviewModel } from '@/lib/overview';
+import { server } from '@/lib/server';
 import { getSettingsState } from '@/lib/settings';
 
 export const dynamic = 'force-dynamic';
 
-const tone = (ok: boolean) => (ok ? 'text-emerald-400' : 'text-red-400');
+const POLLERS = ['alerts', 'nodes', 'interfaces', 'events', 'topology'] as const;
 
-const PRIORITY_STYLE: Record<string, string> = {
-  P1: 'bg-red-500 text-white',
-  P2: 'bg-orange-500 text-slate-950',
-  P3: 'bg-amber-300 text-slate-950',
-  P4: 'bg-slate-600 text-slate-100',
-};
-
-function since(d: Date): string {
-  const min = Math.round((Date.now() - d.getTime()) / 60_000);
-  if (min < 1) return 'just now';
-  if (min < 60) return `${min} min ago`;
-  const h = Math.round(min / 60);
-  return h < 48 ? `${h} h ago` : `${Math.round(h / 24)} d ago`;
-}
-
-/** Operational status + correlated incidents. The full dashboard (sites, map, SSE) arrives in Milestone 3. */
-export default async function Home({
+export default async function Overview({
   searchParams,
 }: {
   searchParams: Promise<{ welcome?: string }>;
 }) {
-  const user = await requireAdmin('/');
+  const user = await requireUser('/');
   const state = await getSettingsState();
-  if (!state.cfg?.setupComplete) redirect('/setup/orion');
-  const { report } = await getHealth();
+  if (!state.cfg?.setupComplete && !state.cfg?.envKeys.has('SWIS_PASSWORD')) {
+    if (user.isAdmin) redirect('/setup/orion');
+  }
+  const cfg = state.cfg ?? server().bootstrap;
   const { welcome } = await searchParams;
-  const { db } = server();
   const now = Date.now();
-  const [noise24, noise7, counts, incidents] = await Promise.all([
+  const { db } = server();
+  const [model, health, noise24, noise7, map] = await Promise.all([
+    overviewModel(new Date(now)),
+    getHealth(),
     noiseStats(db.db, new Date(now - 86_400_000)),
     noiseStats(db.db, new Date(now - 7 * 86_400_000)),
-    openIncidentCounts(db.db),
-    listIncidents(db.db, { limit: 40 }),
+    mapConfig(cfg),
   ]);
-  const tz = state.cfg!.timezone;
+  const { report } = health;
+  const swisUp = report.swis.status === 'up';
+  const pollers = new Map(report.pollers.map((p) => [p.poller, p]));
+
   return (
-    <Shell user={user.username}>
+    <Shell user={user} wide>
       {welcome && (
         <div className="mb-6">
           <Alert tone="success" title="Monitoring started">
-            The worker begins polling SolarWinds within a few seconds. This page shows its progress.
+            The worker begins polling SolarWinds within a few seconds; this page updates by itself.
           </Alert>
         </div>
       )}
-      <h1 className="text-2xl font-semibold">Status</h1>
-      <section className="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-3">
-        <Card>
-          <div className="text-sm text-slate-400">Database</div>
-          <div className={`text-2xl font-semibold ${tone(report.db === 'ok')}`}>{report.db}</div>
-        </Card>
-        <Card>
-          <div className="text-sm text-slate-400">Worker</div>
-          <div className={`text-2xl font-semibold ${tone(report.worker.status === 'ok')}`}>
-            {report.worker.status}
-          </div>
-          {report.worker.ageSec !== null && (
-            <div className="text-sm text-slate-400">heartbeat {report.worker.ageSec}s ago</div>
-          )}
-        </Card>
-        <Card>
-          <div className="text-sm text-slate-400">SolarWinds (SWIS)</div>
-          <div className={`text-2xl font-semibold ${tone(report.swis.status === 'up')}`}>
-            {report.swis.status}
-          </div>
-          {report.swis.tlsVerification === 'DISABLED' && (
-            <div className="text-sm text-red-400">TLS verification disabled</div>
-          )}
-        </Card>
-      </section>
-      <section className="mt-6 grid grid-cols-2 gap-4 sm:grid-cols-4">
+      <h1 className="sr-only">Network status overview</h1>
+
+      <section
+        className="grid grid-cols-2 gap-4 md:grid-cols-4 xl:grid-cols-7"
+        aria-label="Summary"
+      >
         {(['P1', 'P2', 'P3', 'P4'] as const).map((p) => (
-          <Card key={p}>
+          <Link
+            key={p}
+            href={`/incidents?priority=${p}`}
+            className="rounded-xl border border-white/10 bg-white/[0.03] p-4 hover:bg-white/[0.06]"
+            data-testid={`count-${p}`}
+          >
             <div className="flex items-center justify-between">
-              <span className={`rounded px-2 py-0.5 text-sm font-bold ${PRIORITY_STYLE[p]}`}>
-                {p}
-              </span>
-              <span className="text-3xl font-semibold">{counts[p]}</span>
+              <PriorityBadge p={p} />
+              <span className="text-3xl font-semibold">{model.counts[p]}</span>
             </div>
-            <div className="mt-1 text-sm text-slate-400">open incidents</div>
-          </Card>
+            <div className="mt-2 text-xs text-slate-400">
+              open {PRIORITY[p]!.label.split(' ')[1]} incident{model.counts[p] === 1 ? '' : 's'}
+            </div>
+          </Link>
         ))}
+        <div className="col-span-2 rounded-xl border border-white/10 bg-white/[0.03] p-4 md:col-span-2 xl:col-span-2">
+          <div className="text-xs text-slate-400">Noise reduction, last 24 hours</div>
+          <div className="mt-1 text-5xl font-semibold" data-testid="noise-24h">
+            {noise24.ratio !== null ? `${noise24.ratio} : 1` : '—'}
+          </div>
+          <div className="mt-1 text-xs text-slate-400">
+            {noise24.rawAlerts} Orion alerts → {noise24.incidents} incident
+            {noise24.incidents === 1 ? '' : 's'} · 7 days:{' '}
+            {noise7.ratio !== null ? `${noise7.ratio} : 1` : '—'}
+          </div>
+        </div>
+        <div className="col-span-2 rounded-xl border border-white/10 bg-white/[0.03] p-4 md:col-span-2 xl:col-span-1">
+          <div className="text-xs text-slate-400">SolarWinds</div>
+          <div className="mt-2 flex items-center gap-2 text-lg font-semibold">
+            <LevelIcon level={swisUp ? 'ok' : report.swis.status === 'down' ? 'bad' : 'unknown'} />
+            {swisUp ? 'Connected' : report.swis.status === 'down' ? 'Unreachable' : 'Unknown'}
+          </div>
+          <div className="mt-1 text-xs text-slate-400">
+            Alerts polled{' '}
+            <PollAgo poller="alerts" initial={pollers.get('alerts')?.lastSuccessAt ?? null} />
+          </div>
+        </div>
       </section>
 
-      <Card
-        className="mt-6"
-        title="Noise reduction"
-        description="Raw Orion alert raises per incident opened — the headline success metric (pre-existing alerts at startup excluded)."
-      >
-        <div className="grid grid-cols-2 gap-6">
-          {[
-            ['Last 24 hours', noise24],
-            ['Last 7 days', noise7],
-          ].map(([label, n]) => {
-            const s = n as typeof noise24;
-            return (
-              <div key={label as string}>
-                <div className="text-sm text-slate-400">{label as string}</div>
-                <div className="text-3xl font-semibold">
-                  {s.ratio !== null ? `${s.ratio} : 1` : '—'}
-                </div>
-                <div className="text-sm text-slate-400">
-                  {s.rawAlerts} alerts → {s.incidents} incident{s.incidents === 1 ? '' : 's'}
-                </div>
-              </div>
-            );
-          })}
+      {map.problem && user.isAdmin && (
+        <div className="mt-6">
+          <Alert tone="warning">{map.problem}</Alert>
         </div>
-      </Card>
+      )}
+
+      <div className="mt-6 grid gap-6 lg:grid-cols-3">
+        <Card
+          className="lg:col-span-2"
+          title="Sites"
+          description="Grouped by division. Red: a P1/P2 incident, a site outage or the WAN firewall down. Amber: anything else open or down."
+        >
+          <SiteGrid groups={model.groups} />
+          {model.unmappedNodes > 0 && (
+            <p className="mt-4 text-xs text-slate-400">
+              {model.unmappedNodes} monitored device{model.unmappedNodes === 1 ? ' is' : 's are'}{' '}
+              not mapped to a site
+              {user.isAdmin && (
+                <>
+                  {' '}
+                  (
+                  <Link href="/settings/mapping" className="underline">
+                    fix in Settings
+                  </Link>
+                  )
+                </>
+              )}
+              .
+            </p>
+          )}
+        </Card>
+        <div className="space-y-6">
+          <Card title="Map">
+            <SiteMap
+              height={360}
+              config={map}
+              sites={model.tiles.map((t) => ({
+                code: t.code,
+                name: t.name,
+                level: t.health.level,
+                reason: t.health.reason,
+                lat: t.lat,
+                lon: t.lon,
+                mapX: t.mapX,
+                mapY: t.mapY,
+              }))}
+            />
+          </Card>
+          <Card title="Last polls" description="Successful reads from SolarWinds, per dataset.">
+            <table className="w-full text-sm">
+              <tbody>
+                {POLLERS.map((p) => {
+                  const s = pollers.get(p);
+                  return (
+                    <tr key={p} className="border-t border-white/5 first:border-0">
+                      <td className="py-1.5 text-slate-300">{p}</td>
+                      <td className="py-1.5 text-right tabular-nums text-slate-400">
+                        <PollAgo poller={p} initial={s?.lastSuccessAt ?? null} />
+                      </td>
+                      <td className="w-6 py-1.5 text-right">
+                        {s && s.consecutiveFailures > 0 && (
+                          <span title={s.lastError ?? ''}>
+                            <LevelIcon level="bad" size={14} />
+                          </span>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </Card>
+        </div>
+      </div>
 
       <Card
         className="mt-6"
-        title="Incidents"
-        description="Open incidents first, then the most recent. Click one for the summary and why it has that priority."
+        title={`Open incidents (${model.openIncidents.length})`}
+        actions={
+          <Link href="/incidents?status=all" className="text-sm text-sky-300 hover:underline">
+            All incidents →
+          </Link>
+        }
       >
-        {incidents.length === 0 && <p className="text-sm text-slate-400">No incidents yet.</p>}
-        <ul className="divide-y divide-white/5">
-          {incidents.map((i) => {
-            const open = i.status === 'open' || i.status === 'acknowledged';
-            return (
-              <li key={i.id}>
-                <details className="group py-2.5">
-                  <summary className="flex cursor-pointer flex-wrap items-center gap-3 text-sm">
-                    <span
-                      className={`rounded px-2 py-0.5 text-xs font-bold ${PRIORITY_STYLE[i.priority]}`}
-                    >
-                      {i.priority}
-                    </span>
-                    <span className={open ? 'font-medium text-slate-100' : 'text-slate-400'}>
-                      {i.title}
-                    </span>
-                    {i.siteName && !i.title.includes(i.siteName) && (
-                      <span className="text-slate-500">{i.siteName}</span>
-                    )}
-                    <Badge tone={open ? 'warn' : 'neutral'}>{i.status}</Badge>
-                    {i.inMaintenance && <Badge tone="info">maintenance</Badge>}
-                    {i.seeded && <Badge>pre-existing</Badge>}
-                    <span className="ml-auto text-xs text-slate-500">
-                      INC-{i.id} · {i.alertCount} alert{i.alertCount === 1 ? '' : 's'} · opened{' '}
-                      {since(i.openedAt)}
-                    </span>
-                  </summary>
-                  <div className="mt-3 space-y-2 rounded-lg border border-white/10 bg-slate-950/40 p-4 text-sm">
-                    <p>{i.templateSummary}</p>
-                    <p className="text-xs text-slate-400">
-                      Priority: {i.priorityFactors.explanation.join(' · ')}
-                    </p>
-                    <p className="text-xs text-slate-400">
-                      Opened {i.openedAt.toLocaleString('en-US', { timeZone: tz })}
-                      {i.resolvedAt &&
-                        ` · resolved ${i.resolvedAt.toLocaleString('en-US', { timeZone: tz })}`}{' '}
-                      · recovery target{' '}
-                      {i.recoveryTargetMin % 60 === 0
-                        ? `${i.recoveryTargetMin / 60} h`
-                        : `${i.recoveryTargetMin} min`}
-                    </p>
-                  </div>
-                </details>
-              </li>
-            );
-          })}
-        </ul>
+        <IncidentRows rows={model.openIncidents} empty="Nothing open. Every site is quiet." />
       </Card>
-
-      <Card className="mt-6" title="Pollers">
-        <table className="w-full text-left text-sm">
-          <thead className="text-slate-400">
-            <tr>
-              <th className="py-2">Poller</th>
-              <th>Last success</th>
-              <th>Failures</th>
-              <th>Last error</th>
-            </tr>
-          </thead>
-          <tbody>
-            {report.pollers.length === 0 && (
-              <tr>
-                <td colSpan={4} className="py-3 text-slate-400">
-                  No polls yet.
-                </td>
-              </tr>
-            )}
-            {report.pollers.map((p) => (
-              <tr key={p.poller} className="border-t border-white/10">
-                <td className="py-2 font-mono">{p.poller}</td>
-                <td>
-                  {p.lastSuccessAt
-                    ? new Date(p.lastSuccessAt).toLocaleString('en-US', {
-                        timeZone: state.cfg!.timezone,
-                      })
-                    : '—'}
-                </td>
-                <td className={tone(p.consecutiveFailures === 0)}>{p.consecutiveFailures}</td>
-                <td className="max-w-xs truncate text-xs text-slate-400" title={p.lastError ?? ''}>
-                  {p.lastError ?? ''}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </Card>
-      <p className="mt-6 text-sm text-slate-400">
-        Change the connection, mapping, sites or intervals any time in{' '}
-        <Link href="/settings" className="underline">
-          Settings
-        </Link>
-        .
-      </p>
     </Shell>
   );
 }

@@ -78,3 +78,10 @@ export async function runWorkerJob<T>(
     message: 'The worker did not answer in time. It may still be busy; try again in a moment.',
   };
 }
+
+/** Queue a job for the worker without waiting for it (e.g. Orion write-back). */
+export async function enqueueWorkerJob(queue: string, data: object): Promise<void> {
+  const b = await boss();
+  const id = await b.send(queue, data, { retryLimit: 2, retryDelay: 15, expireInSeconds: 300 });
+  if (!id) throw new Error('the job could not be queued');
+}
