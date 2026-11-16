@@ -1,0 +1,68 @@
+# Open questions for Mercer Landmark IT
+
+Each question has a **placeholder default** that is already wired into config or seed
+data, so none of them blocks development. Answer them in any order. Where it says
+"Where to change", that is the only place that needs an update.
+
+## A. SolarWinds / Orion
+
+| # | Question | Placeholder default | Where to change |
+|---|---|---|---|
+| A1 | Orion server hostname (FQDN) and Orion Platform / NPM version? | `orion.mercer.local`, Orion 2024.x | `SWIS_HOST` |
+| A2 | Name of the read-only Orion account? (README explains how to create it.) | `svc-mas-ro` | `SWIS_USERNAME` / `SWIS_PASSWORD(_FILE)` |
+| A3 | Is the Orion web certificate self-signed or issued by an internal CA? Which name is on it? | Self-signed. Export it to `./secrets/orion-ca.pem` | `SWIS_CA_CERT_PATH`, `SWIS_TLS_SERVERNAME` |
+| A4 | **Actual node custom-property names** for site, division and city? Is there one for device role or business function, such as "Scale"? | `Site`, `Division`, `City`. Role is inferred from vendor and caption | `CP_SITE_FIELD`, `CP_DIVISION_FIELD`, `CP_CITY_FIELD`, `CP_ROLE_FIELD`; later in Admin → Mapping |
+| A5 | Do hostnames follow a site-code convention, such as `ROCK-FW01`? | Regex `^([A-Za-z]{3,5})[-_]` maps to a site code when the Site property is empty | `SITE_FROM_CAPTION_REGEX` |
+| A6 | Are **Orion dependencies** configured, for example "site FortiGate is the parent of the site group"? Is NPM topology (CDP/LLDP) populated? | Assume partial. Correlation falls back to same-site grouping, then Orion `Unreachable` status | Run `pnpm swis:discover`, which reports the counts |
+| A7 | Does SWIS return timestamps in UTC? What time zone is the Orion server in? | UTC, and the server is Eastern | `SWIS_NAIVE_TIMEZONE` (discovery prints both) |
+| A8 | Which Orion alert definitions are in use today, and how is Severity used? | Standard: Critical for node down, Warning for high utilization | Discovery lists them |
+| A9 | How are **CyberPower UPS** units monitored? Nodes with CyberPower MIB UnDP pollers, or SAM? What are the "on battery" alerts named? | SNMP nodes, alert names match `/battery\|utility power\|ups/i` | `app_settings.mapping.alertKindRules` (Admin, M6) |
+| A10 | How are **CompuWeigh scale systems** monitored? As Windows nodes or SAM application monitors? What naming do they use? | Windows nodes with caption matching `/scale\|cwg\|compuweigh/i` | `ROLE_RULES` mapping |
+| A11 | Do you want write-back (ack in MAS acks in Orion)? If yes, we need a second, write-capable account. | Off | `SWIS_WRITEBACK_ENABLED` |
+| A12 | Rough scale: how many nodes and interfaces are monitored? | ≤ 1,500 nodes, ≤ 6,000 interfaces (sizing and page size assume this) | `SWIS_PAGE_SIZE`, poll intervals |
+
+## B. Sites, divisions and business rules
+
+| # | Question | Placeholder default | Where to change |
+|---|---|---|---|
+| B1 | **Full site list**: name, code, division, city and lat/long for the map. | 12 placeholder sites in `packages/db/seed/sites.placeholder.json`, marked `profile_status=placeholder`. Includes Celina HQ, Rockford, Coldwater, Fort Recovery, St. Henry, Mendon, Ohio City, Van Wert, Wapakoneta, an agronomy center, MPS Feed St. Marys and Heartland Feed Services | Admin → Sites (M6), or edit the seed and run `pnpm db:seed` |
+| B2 | **Tier per site** (Critical / High / Standard), and which sites are **harvest-critical**. | HQ is Critical. Grain elevators are High and harvest-critical. Everything else is Standard | Site Profiles |
+| B3 | Should MPS Feed and Heartland Feed Services be their own divisions on the dashboard, or roll up under Feed? | Their own divisions, flagged as affiliates and shown next to Feed | `divisions` seed |
+| B4 | Where is Heartland Feed Services located? | Unknown. No map pin until set | Site Profile |
+| B5 | Business hours per site type? | Mon–Fri 07:00–17:00 ET. During harvest, grain sites use Mon–Sat 06:00–22:00 | Site Profile `business_hours` / `harvest_hours` |
+| B6 | Harvest window Sept 1 – Dec 15: confirmed? | Yes | Admin → Season calendar |
+| B7 | Should we also add **wheat harvest** (about late June – July) for grain sites and a **spring application season** (about Mar 15 – Jun 15) for agronomy centers as high-risk periods? | Both are seeded **disabled** with a 1.2× multiplier | Admin → Season calendar |
+| B8 | Recovery targets: 4 h during harvest and 8 h otherwise, for grain scale systems only or for all sites? | All harvest-critical sites during harvest get 4 h. Everything else gets 8 h | `RECOVERY_TARGET_*_MIN` |
+
+## C. Notifications & on-call
+
+| # | Question | Placeholder default | Where to change |
+|---|---|---|---|
+| C1 | **Teams channel layout**: one channel or several? Per division? | Team "IT Network Alerts" with three channels: `net-critical` (P1–P2, all divisions), `net-alerts` (P3–P4), `net-digest` (daily and weekly digests). Plus `mas-shadow` for shadow mode | `TEAMS_WEBHOOK_*` + Admin → Routing |
+| C2 | Who creates the Teams Workflows (Power Automate) flows, and are premium connectors allowed? | IT creates them with the README steps. Only the standard "When a Teams webhook request is received" trigger is needed | README |
+| C3 | **On-call roster**: names, mobile numbers, Pushover yes/no, rotation handoff day and time, and who is the **IT lead** (final escalation)? | 4 placeholder people, Monday 08:00 ET handoff. Escalation goes primary → secondary → IT lead after 15 min and 30 min | Admin → On-call (M4) |
+| C4 | The after-hours help-desk line forwards to a cell phone. Is that always the on-call person's phone, or a shared phone? | It is the on-call person's phone, so SMS goes there | Admin → People |
+| C5 | Twilio or Pushover (or both)? US SMS from an application needs **A2P 10DLC registration or a verified toll-free number**. Approval can take days to weeks, so please start early. | Both are supported. Pushover is the default for the pilot | `SMS_PROVIDER`, `PUSH_PROVIDER` |
+| C6 | SMS for P2 after hours, or P1 only? | P1 always, and P2 outside business hours | Admin → Notifier settings |
+| C7 | Quiet hours for non-urgent Teams posts (P3/P4), for example overnight? | None. P3/P4 go to Teams any time, but never page | Admin → Notifier settings |
+| C8 | Shadow-mode length and success criteria before cutover? | 3 weeks. Exit when the noise ratio is ≥ 5:1 and no missed P1s | `SHADOW_MODE` |
+
+## D. Identity, hosting & access
+
+| # | Question | Placeholder default | Where to change |
+|---|---|---|---|
+| D1 | Entra tenant ID, and who registers the app? | README steps | `AUTH_MICROSOFT_ENTRA_ID_*` |
+| D2 | Name and object ID of the **Entra security group** that may sign in? Should a separate admin group exist? | `SG-IT-NetMonitor`. Admins come from `BOOTSTRAP_ADMIN_EMAILS` | `ENTRA_ALLOWED_GROUP_ID`, `ENTRA_ADMIN_GROUP_ID` |
+| D3 | Dashboard URL (used in Teams and SMS links) and its TLS: a reverse proxy with an internal certificate? | `https://netmon.mercer.local` behind your existing reverse proxy | `APP_BASE_URL` |
+| D4 | VM details: which outbound hosts are allowed through the firewall? (List in architecture §11.) | All listed hosts are allowed | Network team |
+| D5 | Wall display: what device or browser, and which subnet or IP is it on (for the kiosk IP allowlist)? | Chromium kiosk on the IT office VLAN | Admin → Kiosk tokens |
+| D6 | Backups: is a local volume enough, or should dumps be copied to a NAS or SMB share? What RPO? | Nightly dump, 14 copies kept locally | `BACKUP_*` |
+
+## E. AI usage
+
+| # | Question | Placeholder default | Where to change |
+|---|---|---|---|
+| E1 | Is sending hostnames and site names to the Anthropic API approved? Should IPs and serials be redacted? | Hostnames and sites are sent. IPs, MACs and serials are redacted | `AI_REDACT` |
+| E2 | Daily AI budget? | US$5/day. Warning at 80%. At 100%, templates only | `AI_DAILY_BUDGET_USD` |
+| E3 | Is an Anthropic API key or organization already in place? Who owns billing? | — | `ANTHROPIC_API_KEY(_FILE)` |
+| E4 | Digest time and recipients: 07:00 ET to `net-digest`? Should there be a shift digest at 17:00? | 07:00 ET daily and Monday 07:30 weekly. No evening digest | `DIGEST_DAILY_CRON` |

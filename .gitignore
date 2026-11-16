@@ -1,0 +1,17 @@
+node_modules/
+dist/
+.next/
+out/
+coverage/
+*.tsbuildinfo
+.env
+.env.*
+!.env.example
+secrets/
+backups/
+fixtures/swis/recorded/*.raw.json
+playwright-report/
+test-results/
+.turbo/
+.DS_Store
+*.log
