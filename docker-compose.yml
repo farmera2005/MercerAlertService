@@ -1,0 +1,108 @@
+# MercerAlertService — production-style stack for a Linux VM that can reach Orion on TCP 17774.
+#   cp .env.example .env   # fill in values
+#   docker compose up -d --build
+# Local development against the mock SWIS:
+#   docker compose --profile dev up -d --build   (and set SWIS_BASE_URL=http://mock-swis:17774)
+name: mercer-alert-service
+
+x-app: &app
+  env_file: .env
+  environment: &app-env
+    DATABASE_URL: postgres://${POSTGRES_USER:-mas}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@db:5432/${POSTGRES_DB:-mas}
+    TZ: ${APP_TIMEZONE:-America/New_York}
+  volumes:
+    - ./secrets:/run/mas-secrets:ro
+  logging:
+    driver: json-file
+    options: { max-size: '20m', max-file: '5' }
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-mas}
+      POSTGRES_USER: ${POSTGRES_USER:-mas}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+      TZ: UTC
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      # Localhost-only, for `pnpm dev:*` and psql on the VM. Remove if not needed.
+      - '127.0.0.1:${DB_PORT:-5432}:5432'
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U ${POSTGRES_USER:-mas} -d ${POSTGRES_DB:-mas}']
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    shm_size: 256mb
+
+  migrate:
+    <<: *app
+    build: &build
+      context: .
+      dockerfile: docker/Dockerfile
+      target: worker
+      args: { APP_VERSION: '${APP_VERSION:-dev}' }
+      secrets: [build_ca]
+    image: mercer-alert-service/worker:${APP_VERSION:-dev}
+    command: ['node', 'dist/migrate.js']
+    restart: 'no'
+    depends_on:
+      db: { condition: service_healthy }
+
+  worker:
+    <<: *app
+    image: mercer-alert-service/worker:${APP_VERSION:-dev}
+    restart: unless-stopped
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+    # Healthcheck (GET :9090/healthz) is defined in the image.
+    stop_grace_period: 30s
+
+  web:
+    <<: *app
+    build: { <<: *build, target: web }
+    image: mercer-alert-service/web:${APP_VERSION:-dev}
+    restart: unless-stopped
+    ports:
+      - '${WEB_PORT:-3000}:3000'
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+
+  backup:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    entrypoint: ['/bin/sh', '/backup.sh']
+    environment:
+      PGHOST: db
+      PGDATABASE: ${POSTGRES_DB:-mas}
+      PGUSER: ${POSTGRES_USER:-mas}
+      PGPASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+      BACKUP_TIME: ${BACKUP_TIME:-02:30}
+      BACKUP_KEEP_DAYS: ${BACKUP_KEEP_DAYS:-14}
+      TZ: ${APP_TIMEZONE:-America/New_York}
+    volumes:
+      - ./docker/backup/backup.sh:/backup.sh:ro
+      - ${BACKUP_HOST_DIR:-./backups}:/backups
+    depends_on:
+      db: { condition: service_healthy }
+
+  mock-swis:
+    profiles: [dev]
+    build: { <<: *build, target: mock-swis }
+    image: mercer-alert-service/mock-swis:dev
+    restart: unless-stopped
+    environment:
+      MOCK_SWIS_USER: ${SWIS_USERNAME:-mas}
+      MOCK_SWIS_PASSWORD: ${SWIS_PASSWORD:-mas}
+    ports:
+      - '127.0.0.1:17774:17774'
+
+volumes:
+  pgdata:
+
+secrets:
+  # Only used at build time; see docker/Dockerfile. Defaults to an empty placeholder.
+  build_ca:
+    file: ${BUILD_CA_FILE:-./docker/no-extra-ca.pem}

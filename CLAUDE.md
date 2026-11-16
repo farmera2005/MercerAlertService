@@ -28,8 +28,8 @@ docker compose up -d         # full stack; add --profile dev for mock-swis
    `apps/web` only reads the DB, writes config and actions, and serves SSE. Background
    work belongs in `apps/worker`.
 2. **Deterministic first.** Incident creation, grouping, priority and delivery decisions
-   live in `packages/core` as pure, unit-tested functions. AI output may only *enrich*
-   (titles and summaries) or *suggest* (±1 priority level, clamped by guardrails in code).
+   live in `packages/core` as pure, unit-tested functions. AI output may only _enrich_
+   (titles and summaries) or _suggest_ (±1 priority level, clamped by guardrails in code).
 3. **AI is never on the critical path.** Every AI call has a timeout, runs in its own
    job, and has a templated fallback. Nothing waits on Claude before a notification goes out.
 4. **SWQL lives only in `packages/swis/src/queries.ts`.** Every column gets an explicit
@@ -50,57 +50,58 @@ docker compose up -d         # full stack; add --profile dev for mock-swis
 
 ## Code conventions
 
-* TypeScript strict, ESM (`"type": "module"`), `moduleResolution: Bundler`. Workspace
+- TypeScript strict, ESM (`"type": "module"`), `moduleResolution: Bundler`. Workspace
   packages export their TS source (`@mercer/core`, `@mercer/db`, `@mercer/swis`, …). The
   worker is bundled with tsup. Next.js uses `transpilePackages`.
-* Validate at every boundary with **Zod**: env, SWIS rows, AI output, API route bodies
+- Validate at every boundary with **Zod**: env, SWIS rows, AI output, API route bodies
   and SSE payloads. Infer types from schemas (`z.infer`) rather than duplicating them.
-* **Logging:** use `createLogger('component')` from `@mercer/core`, which is pino with
+- **Logging:** use `createLogger('component')` from `@mercer/core`, which is pino with
   JSON output and secret redaction. No `console.log` outside scripts. Log objects first:
   `log.info({ poller, rows }, 'poll ok')`.
-* **Time:** always store `Date` or `timestamptz` in UTC. Use `@mercer/core/time` helpers
+- **Time:** always store `Date` or `timestamptz` in UTC. Use `@mercer/core/time` helpers
   for business-hours and season math in `APP_TIMEZONE`. Never use the server's local
   time zone.
-* **DB:** Drizzle query builder through repository functions in `packages/db/src/repo/*`.
+- **DB:** Drizzle query builder through repository functions in `packages/db/src/repo/*`.
   Use raw `sql` only inside `packages/db`. Multi-row writes are batched
   (`insert … onConflictDoUpdate`). Wrap snapshot replacement and its transitions in one
   transaction.
-* **Migrations:** edit the schema and run `pnpm db:generate`, then commit the generated
-  SQL. **Never edit a migration that has been merged.** Add a new one instead.
-* **Errors:** throw typed errors (`SwisHttpError`, `SwisSchemaError`, `CircuitOpenError`,
+- **Migrations:** edit the schema and run `pnpm db:generate`, then commit the generated
+  SQL. **Never edit a migration that has been merged.** Add a new one instead. CI fails if the schema and migrations drift. Import the migrator from `@mercer/db/migrate`, not the package root, so Next.js never bundles it.
+
+- **Errors:** throw typed errors (`SwisHttpError`, `SwisSchemaError`, `CircuitOpenError`,
   …). Job handlers let errors propagate so pg-boss retries them, and record the failure in
   `poller_state` or `notifications`.
-* **Naming:** files use `kebab-case.ts`, types use `PascalCase`, DB columns use
+- **Naming:** files use `kebab-case.ts`, types use `PascalCase`, DB columns use
   `snake_case`, and TS fields use `camelCase`. Queue names are dotted (`swis.poll.alerts`).
-* **Tests:** Vitest, colocated as `*.test.ts`. Integration tests are `*.int.test.ts` and
+- **Tests:** Vitest, colocated as `*.test.ts`. Integration tests are `*.int.test.ts` and
   are skipped unless `DATABASE_URL_TEST` is set. Correlation, scoring, guardrails and
   routing changes need tests. Scenario tests in `tools/simulator` assert incident counts,
   priorities and routing.
-* **UI:** Tailwind + shadcn/ui, dark theme by default, and wall views must be readable
+- **UI:** Tailwind + shadcn/ui, dark theme by default, and wall views must be readable
   from across the room (≥ 28px body text, WCAG AA contrast). Charts use Recharts, and the
   map uses Leaflet.
-* Keep comments for *why*, not *what*. Business terms ("scales at Rockford elevator")
+- Keep comments for _why_, not _what_. Business terms ("scales at Rockford elevator")
   belong in prompts and templates, not hard-coded in logic. Use the site profile and
   role mapping for those.
 
 ## Domain glossary
 
-* **Site Profile:** a row in `sites`: division, tier (critical/high/standard),
+- **Site Profile:** a row in `sites`: division, tier (critical/high/standard),
   harvest-critical flag, business hours, owner group.
-* **Division:** corporate, grain, agronomy, feed, energy, mps_feed, heartland_feed. The
+- **Division:** corporate, grain, agronomy, feed, energy, mps_feed, heartland_feed. The
   last two are affiliates.
-* **Device role:** firewall (FortiGate WAN edge), core_switch, switch, router,
+- **Device role:** firewall (FortiGate WAN edge), core_switch, switch, router,
   access_point, server, scale_system (CompuWeigh), ups, other.
-* **Transition:** a stored state change (alert raised/cleared/retriggered/acked, a
+- **Transition:** a stored state change (alert raised/cleared/retriggered/acked, a
   node or interface status change, or SWIS source down/up).
-* **Noise ratio:** raw alert raises ÷ incidents opened over a window. This is the
+- **Noise ratio:** raw alert raises ÷ incidents opened over a window. This is the
   headline metric.
-* **Shadow mode:** every outbound message is redirected to one test Teams channel, and
+- **Shadow mode:** every outbound message is redirected to one test Teams channel, and
   no paging happens.
 
 ## Git
 
-* Branch per milestone or feature. Use Conventional Commits (`feat(swis): …`,
+- Branch per milestone or feature. Use Conventional Commits (`feat(swis): …`,
   `fix(core): …`). Each commit must be green on lint, typecheck and test.
-* Don't commit `.env`, `secrets/`, `backups/`, or recorded fixtures that haven't been
+- Don't commit `.env`, `secrets/`, `backups/`, or recorded fixtures that haven't been
   through `swis:record`'s sanitizer.

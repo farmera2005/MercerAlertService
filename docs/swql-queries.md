@@ -6,21 +6,21 @@ All queries go to `POST /SolarWinds/InformationService/v3/Json/Query` with the b
 
 Rules:
 
-* **Explicit aliases on every column** (`AS AlertActiveID`). Result keys are then
+- **Explicit aliases on every column** (`AS AlertActiveID`). Result keys are then
   deterministic regardless of Orion version.
-* **Required vs optional fields.** At startup and hourly, the worker reads
+- **Required vs optional fields.** At startup and hourly, the worker reads
   `Metadata.Property` for every entity below. If an optional field doesn't exist in our
   Orion version, it is dropped from the SELECT and a warning is logged. If a required
   field is missing, that poller fails with a clear error. Optional fields are marked
   `?` below.
-* **Paging.** Snapshot queries use `ORDER BY <unique key> WITH ROWS a TO b` with a page
+- **Paging.** Snapshot queries use `ORDER BY <unique key> WITH ROWS a TO b` with a page
   size of `SWIS_PAGE_SIZE` (default 1000), looping until a short page comes back.
   Incremental queries use `WHERE <id> > @cursor ORDER BY <id> WITH ROWS 1 TO n` and loop
   until a short page.
-* **Parameters.** Values are always bound (`@cursor`). The only inlined values are
+- **Parameters.** Values are always bound (`@cursor`). The only inlined values are
   validated integers in `WITH ROWS`, and custom-property column names validated against
   `^[A-Za-z_][A-Za-z0-9_]*$`.
-* **Timestamps.** SWIS returns UTC. Strings without an offset are parsed as
+- **Timestamps.** SWIS returns UTC. Strings without an offset are parsed as
   `SWIS_NAIVE_TIMEZONE` (default `UTC`). `swis-discover` prints server UTC and local time,
   so this can be confirmed.
 
@@ -54,12 +54,12 @@ Optional: `TriggeredMessage?, AcknowledgedBy?, AcknowledgedDateTime?, EntityCapt
 
 Diffing against the stored snapshot by `AlertActiveID`:
 
-| Situation | Transition |
-|---|---|
-| New ID | `raised` |
-| New ID for an AlertObjectID we already had | `retriggered` |
-| Missing ID | `cleared` |
-| `Acknowledged` flipped | `acked` / `unacked` |
+| Situation                                  | Transition          |
+| ------------------------------------------ | ------------------- |
+| New ID                                     | `raised`            |
+| New ID for an AlertObjectID we already had | `retriggered`       |
+| Missing ID                                 | `cleared`           |
+| `Acknowledged` flipped                     | `acked` / `unacked` |
 
 `Severity` mapping (confirm with discovery): 0 Informational, 1 Warning, 2 Critical,
 3 Serious, 4 Notice.
@@ -89,16 +89,16 @@ change. The column list comes from Q12.
 
 Status codes (`Orion.StatusInfo`, refreshed hourly) normalize as follows:
 
-| Code(s) | Normalized |
-|---|---|
-| 1 | up |
-| 2 | down |
-| 3 | warning |
-| 14 | critical |
-| 12 | unreachable (Orion's dependency-suppressed child) |
-| 9 | unmanaged |
-| 0, 17 | unknown |
-| others | other |
+| Code(s) | Normalized                                        |
+| ------- | ------------------------------------------------- |
+| 1       | up                                                |
+| 2       | down                                              |
+| 3       | warning                                           |
+| 14      | critical                                          |
+| 12      | unreachable (Orion's dependency-suppressed child) |
+| 9       | unmanaged                                         |
+| 0, 17   | unknown                                           |
+| others  | other                                             |
 
 A change in normalized status produces a `node status` transition. Each poll also folds
 into the `node_metrics_5m` rollup.
@@ -171,19 +171,19 @@ WITH ROWS 1 TO 1000
 
 Required fields:
 
-| Query | Required |
-|---|---|
-| Q4 | `SrcNodeID, SrcInterfaceID, DestNodeID, DestInterfaceID` |
-| Q5 | `DependencyId, ParentUri, ChildUri` |
-| Q6 | `ContainerID, Name` |
-| Q7 | `ContainerID, MemberUri` |
-| Q8 | `AlertID, Name, Severity` |
+| Query | Required                                                 |
+| ----- | -------------------------------------------------------- |
+| Q4    | `SrcNodeID, SrcInterfaceID, DestNodeID, DestInterfaceID` |
+| Q5    | `DependencyId, ParentUri, ChildUri`                      |
+| Q6    | `ContainerID, Name`                                      |
+| Q7    | `ContainerID, MemberUri`                                 |
+| Q8    | `AlertID, Name, Severity`                                |
 
 URIs are parsed locally:
 
-* `…/Orion.Nodes/NodeID=12` → node 12
-* `…/Orion.Nodes/NodeID=12/Interfaces/InterfaceID=34` → interface 34
-* `…/Orion.Groups/ContainerID=5` → group 5
+- `…/Orion.Nodes/NodeID=12` → node 12
+- `…/Orion.Nodes/NodeID=12/Interfaces/InterfaceID=34` → interface 34
+- `…/Orion.Groups/ContainerID=5` → group 5
 
 ## Q9. Events: every 300 s (`SWIS_POLL_EVENTS_SEC`), incremental
 
@@ -249,19 +249,19 @@ WHERE p.EntityName IN (@e0, @e1, @e2, …)
 
 ## Discovery-only (`scripts/swis-discover.ts`)
 
-* `Metadata.Entity`: confirms that each entity we use exists.
-* `Metadata.Property` for each entity: lists fields and types, and marks which Q1–Q13
+- `Metadata.Entity`: confirms that each entity we use exists.
+- `Metadata.Property` for each entity: lists fields and types, and marks which Q1–Q13
   fields are missing.
-* `Orion.CustomProperty` for nodes. For each node custom property it also runs
+- `Orion.CustomProperty` for nodes. For each node custom property it also runs
   `SELECT cp.<Field> AS Value, COUNT(cp.NodeID) AS Nodes FROM Orion.NodesCustomProperties cp GROUP BY cp.<Field>`.
   The output shows the actual Site and Division values, so they can be mapped to site
   profiles.
-* `SELECT n.Vendor, n.MachineType, COUNT(n.NodeID) … GROUP BY n.Vendor, n.MachineType`:
+- `SELECT n.Vendor, n.MachineType, COUNT(n.NodeID) … GROUP BY n.Vendor, n.MachineType`:
   supports device-role classification.
-* `SELECT TOP 1 GETUTCDATE() AS UtcNow, GETDATE() AS LocalNow FROM Orion.Engines`: time-zone check.
-* Counts for topology connections, dependencies and groups, so we know whether Orion has
+- `SELECT TOP 1 GETUTCDATE() AS UtcNow, GETDATE() AS LocalNow FROM Orion.Engines`: time-zone check.
+- Counts for topology connections, dependencies and groups, so we know whether Orion has
   dependencies and topology configured.
-* `Metadata.Verb` / `Metadata.VerbArgument` for `Orion.AlertActive`: confirms the
+- `Metadata.Verb` / `Metadata.VerbArgument` for `Orion.AlertActive`: confirms the
   `Acknowledge` signature before write-back is enabled.
 
 ## Write-back (feature flag, separate account)

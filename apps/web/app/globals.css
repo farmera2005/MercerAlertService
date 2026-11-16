@@ -1,0 +1,17 @@
+@import 'tailwindcss';
+
+/* Dark by default; readable from across a room on the wall display. */
+:root {
+  color-scheme: dark;
+  --background: #0b0f14;
+  --foreground: #e6edf3;
+  --muted: #8b98a5;
+  --ok: #22c55e;
+  --warn: #f59e0b;
+  --bad: #ef4444;
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+}
