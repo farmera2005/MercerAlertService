@@ -48,6 +48,7 @@ export default async function WallPage({ params }: { params: Promise<{ token: st
         tz={cfg.timezone}
         rotateSec={cfg.wall.rotateSec}
         showMap={cfg.wall.showMap}
+        pinP1={cfg.wall.pinP1}
         counts={model.counts}
         map={{
           mode: map.mode,

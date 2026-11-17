@@ -21,8 +21,8 @@ Design docs: [architecture](docs/architecture.md) · [database schema](docs/sche
 | 1b. Online setup | Browser setup wizard and Settings: no config files, encrypted secrets, live reload                                                 | **Done** |
 | 2. Correlation   | Dedupe, topology suppression, flap detection, incident lifecycle, priority scoring, seasons, maintenance, simulator                | **Done** |
 | 3. Dashboard v1  | Entra SSO, overview, incidents, site and node pages, SSE, wall display                                                             | **Done** |
-| 4. Notifications | Teams cards, Twilio/Pushover, on-call and escalation, shadow mode                                                                  | Next     |
-| 5. AI            | Summaries, severity suggestion with guardrails, digests, budget, fallbacks                                                         |          |
+| 4. Notifications | Teams cards, Twilio/Pushover, on-call and escalation, shadow mode                                                                  | **Done** |
+| 5. AI            | Summaries, severity suggestion with guardrails, digests, budget, fallbacks                                                         | Next     |
 | 6. Polish        | Ask the network, trends, admin, hardening                                                                                          |          |
 
 ---
@@ -34,8 +34,10 @@ Requirements:
 - Docker Engine with the Compose plugin v2.24 or newer.
 - Outbound TCP **17774** to the Orion server.
 - Outbound HTTPS to the hosts listed in [architecture §11](docs/architecture.md#11-security--operations):
-  `login.microsoftonline.com` for Microsoft sign-in and `tile.openstreetmap.org` for the map
-  (unless you use an offline map image); the rest are needed from Milestone 4 on.
+  `login.microsoftonline.com` for Microsoft sign-in, `tile.openstreetmap.org` for the map
+  (unless you use an offline map image), the Teams Workflows host (`*.logic.azure.com` /
+  `*.powerplatform.com`), `api.pushover.net` and `api.twilio.com` for notifications, and
+  `api.anthropic.com` from Milestone 5.
 
 ```bash
 git clone <repo> /opt/mercer-alert-service && cd /opt/mercer-alert-service
@@ -191,10 +193,33 @@ docker compose run --rm --no-deps -e SWIS_HOST=orion.mercer.local -e SWIS_USERNA
   -e SWIS_PASSWORD='…' worker node dist/discover.js --check-queries
 ```
 
-### Teams, Twilio/Pushover
+### Notifications: Teams, SMS and push
 
-These are configured in the same Settings UI in Milestone 4: Teams Workflows webhooks, Twilio
-(start A2P 10DLC registration early), Pushover and shadow mode.
+MAS starts in **shadow mode**: every message goes to one Teams channel (`#mas-shadow`) marked
+[SHADOW], saying where it would have gone and who would have been paged, and nobody is paged.
+Run it next to the existing SolarWinds e-mails for 2–4 weeks, then turn shadow mode off in
+Settings → Notifications.
+
+1. **Teams.** For each channel (`net-critical` for P1–P2, `net-alerts` for P3–P4, `mas-shadow`):
+   in Teams, channel **…** → **Workflows** → "Post to a channel when a webhook request is
+   received", name it "MAS", create it, copy the URL. Paste it in Settings → Notifications →
+   the channel → Edit, then **Send test**. The URL is stored encrypted and never shown again.
+2. **Pushover** (recommended for the pilot): create an application at pushover.net, paste its
+   API token in Settings → Notifications → Pushover, and give each person their user key in
+   Settings → On-call.
+3. **Twilio SMS** (optional): US application SMS needs **A2P 10DLC registration or a verified
+   toll-free number**, which can take days to weeks, so start early. Enter the Account SID,
+   auth token and sender number (or Messaging Service SID), and each person's mobile number.
+4. **On-call:** replace the placeholder people in Settings → On-call, set the rotation order
+   and the IT lead, and use **Test SMS / Test Pushover** on each person.
+5. **Routing:** the defaults post P1–P2 to `#net-critical`, P3–P4 to `#net-alerts`, page the
+   on-call person for every P1 and for P2 after business hours, and escalate to the next
+   person after 15 minutes, then to the IT lead. Change them in Settings → Routing; the page
+   shows what the rules would do with the incidents open right now.
+
+Every message, including the ones deliberately not sent (maintenance, quiet hours, shadow mode,
+no number on file…), is listed on the incident page. A channel or provider that keeps failing
+shows a red banner on every page and a self-alert in another channel.
 
 ### Orion write-back (optional)
 
@@ -355,10 +380,13 @@ apps/web          Next.js (App Router): setup wizard, Settings, dashboard, Entra
 apps/worker       pg-boss scheduler, SWIS pollers, setup jobs, health server (+ init/migrate/discover)
 packages/core     config + settings registry, encryption, logger, Orion vocabulary, mapping, diffing,
                   correlation engine, priority scoring + AI guardrail, site health, incident
-                  actions, timeline, sign-in rules (all pure, unit-tested)
+                  actions, timeline, sign-in rules, notification routing, on-call and
+                  dispatch planning (all pure, unit-tested)
 packages/db       Drizzle schema, migrations, repositories, seed data
 packages/swis     SWIS client, SWQL catalog, schema probe, discovery, fixture sanitizer
-tools/mock-swis   mock SWIS server, synthetic Mercer-like world, storm scenarios
+packages/notify   Teams Workflows, Twilio and Pushover providers behind one Notifier interface
+tools/mock-swis   mock SWIS server, synthetic Mercer-like world, storm scenarios, and
+                  Teams/Twilio/Pushover sinks (GET /__mock/sink lists what was "sent")
 tools/simulator   replays storms through the real pipeline on a virtual clock and checks the incidents
 scripts/          swis-discover.ts, swis-record.ts
 docker/           Dockerfile, backup sidecar

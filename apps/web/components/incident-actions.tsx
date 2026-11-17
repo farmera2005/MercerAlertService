@@ -49,11 +49,14 @@ export function IncidentActions({
   status,
   snoozedUntil,
   activeAlerts,
+  focus = null,
 }: {
   incidentId: number;
   status: string;
   snoozedUntil: string | null;
   activeAlerts: number;
+  /** Arrived from a Teams button: put the cursor on that action (never act automatically). */
+  focus?: 'ack' | 'snooze' | null;
 }) {
   const open = status === 'open' || status === 'acknowledged';
   const snoozed = !!snoozedUntil && new Date(snoozedUntil).getTime() > Date.now();
@@ -64,7 +67,12 @@ export function IncidentActions({
           {(pending) => (
             <div className="flex gap-2">
               <input type="hidden" name="action" value="ack" />
-              <Input name="text" placeholder="Comment (optional), e.g. on my way" maxLength={500} />
+              <Input
+                name="text"
+                placeholder="Comment (optional), e.g. on my way"
+                maxLength={500}
+                autoFocus={focus === 'ack'}
+              />
               <Button type="submit" disabled={pending}>
                 {pending ? 'Acknowledging…' : 'Acknowledge'}
               </Button>
@@ -108,7 +116,13 @@ export function IncidentActions({
               {(pending) => (
                 <>
                   <input type="hidden" name="action" value="snooze" />
-                  <Select name="minutes" defaultValue="60" aria-label="Snooze for" className="w-36">
+                  <Select
+                    name="minutes"
+                    defaultValue="60"
+                    aria-label="Snooze for"
+                    className="w-36"
+                    autoFocus={focus === 'snooze'}
+                  >
                     {SNOOZE.map(([m, l]) => (
                       <option key={m} value={m}>
                         {l}

@@ -39,6 +39,13 @@ export async function purgeExpired(
     sql`DELETE FROM alert_records WHERE state = 'cleared' AND last_seen_at < ${rawCutoff} AND (incident_id IS NULL OR NOT EXISTS (SELECT 1 FROM incidents i WHERE i.id = alert_records.incident_id))`,
   );
   out.alert_records = recs.rowCount ?? 0;
+  // Incident notifications cascade with their incident; tests and self-alerts age out the same way.
+  const notes = await db.execute(
+    sql`DELETE FROM notifications WHERE incident_id IS NULL AND created_at < ${incCutoff}`,
+  );
+  out.notifications = notes.rowCount ?? 0;
+  const links = await db.execute(sql`DELETE FROM short_links WHERE expires_at < ${now}`);
+  out.short_links = links.rowCount ?? 0;
   for (const [table, column, key] of TARGETS) {
     const cutoff = new Date(now.getTime() - policy[key] * 86_400_000);
     let total = 0;

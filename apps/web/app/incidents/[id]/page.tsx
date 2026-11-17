@@ -1,8 +1,9 @@
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { buildTimeline, displayTitle, formatDuration } from '@mercer/core';
-import { getIncidentDetail } from '@mercer/db';
+import { getIncidentDetail, notificationsForIncident } from '@mercer/db';
 import { IncidentActions } from '@/components/incident-actions';
+import { NotificationLog } from '@/components/notification-log';
 import { Shell } from '@/components/shell';
 import {
   fmtTime,
@@ -36,13 +37,24 @@ interface AiSummary {
   changes?: string;
 }
 
-export default async function IncidentPage({ params }: { params: Promise<{ id: string }> }) {
+export default async function IncidentPage({
+  params,
+  searchParams,
+}: {
+  params: Promise<{ id: string }>;
+  searchParams: Promise<{ do?: string }>;
+}) {
   const user = await requireUser('/incidents');
   const id = Number((await params).id.replace(/^inc-/i, ''));
   if (!Number.isInteger(id) || id <= 0) notFound();
   const cfg = await effectiveConfig();
   const tz = cfg.timezone;
-  const d = await getIncidentDetail(server().db.db, id);
+  const [d, notes] = await Promise.all([
+    getIncidentDetail(server().db.db, id),
+    notificationsForIncident(server().db.db, id),
+  ]);
+  const requested = (await searchParams).do;
+  const intent = requested === 'ack' || requested === 'snooze' ? requested : null;
   if (!d) notFound();
   const inc = d.incident;
   const now = Date.now();
@@ -182,15 +194,33 @@ export default async function IncidentPage({ params }: { params: Promise<{ id: s
           >
             <Timeline rows={timeline} />
           </Card>
+
+          <Card
+            title={`Notifications (${notes.length})`}
+            description="Teams posts, pages and escalations for this incident, including the ones deliberately not sent."
+          >
+            <NotificationLog rows={notes} tz={tz} />
+          </Card>
         </div>
 
         <div className="space-y-6">
           <Card title="Actions">
+            {intent && (
+              <div
+                className="mb-4 rounded-lg border border-sky-400/50 bg-sky-500/10 p-3 text-sm text-sky-100"
+                role="status"
+              >
+                {inc.status === 'open' || inc.status === 'acknowledged'
+                  ? `You came from Teams to ${intent === 'ack' ? 'acknowledge' : 'snooze'} this incident. Confirm below.`
+                  : `This incident is already ${inc.status}.`}
+              </div>
+            )}
             <IncidentActions
               incidentId={inc.id}
               status={inc.status}
               snoozedUntil={inc.snoozedUntil?.toISOString() ?? null}
               activeAlerts={activeAlerts}
+              focus={intent}
             />
             {inc.acknowledgedBy && inc.status === 'acknowledged' && (
               <p className="mt-3 text-xs text-slate-400">

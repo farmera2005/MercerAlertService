@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { isGuid, parseEmailList } from '../auth/entra';
+import { parseQuietHours } from '../notify/quiet';
 import { resolveFileEnv, SECRET_ENV_PREFIXES } from './file-env';
 
 const bool = (def: boolean) => z.stringbool().default(def);
@@ -93,6 +94,8 @@ export const envSchema = z.object({
   MAP_ATTRIBUTION: str('© OpenStreetMap contributors'),
   WALL_ROTATE_SEC: int(20, 5),
   WALL_SHOW_MAP: bool(true),
+  /** Stay on the incident list while any P1 is open. */
+  WALL_PIN_P1: bool(true),
 
   // --- Correlation ---
   CORRELATION_WINDOW_SEC: int(180, 30),
@@ -114,6 +117,30 @@ export const envSchema = z.object({
   SCORING_AFTER_HOURS_MULT: num(0.8, 0.1, 1),
   RECOVERY_TARGET_HARVEST_MIN: int(240, 15),
   RECOVERY_TARGET_DEFAULT_MIN: int(480, 15),
+
+  // --- Notifications ---
+  /** Every message goes to the shadow Teams channel and nobody is paged (pilot / cut-over). */
+  NOTIFY_SHADOW_MODE: bool(true),
+  NOTIFY_SHADOW_CHANNEL: str('mas-shadow'),
+  /** Let shadow mode page the on-call person anyway (to test paging during the pilot). */
+  SHADOW_ALLOW_PAGING: bool(false),
+  /** "22:00-06:00" in APP_TIMEZONE; empty = no quiet hours. */
+  NOTIFY_QUIET_HOURS: str(''),
+  NOTIFY_QUIET_MIN_PRIORITY: z.enum(['P1', 'P2', 'P3', 'P4']).default('P2'),
+  ESCALATE_AFTER_MIN: int(15, 1),
+  PAGE_RATE_LIMIT_PER_15MIN: int(5, 1),
+  ONCALL_HANDOFF_DAY: z.coerce.number().int().min(1).max(7).default(1),
+  ONCALL_HANDOFF_TIME: str('08:00'),
+  NOTIFY_SELF_ALERT_CHANNEL: str('net-critical'),
+  /** Accept http:// webhook URLs (a local mock only; real Teams webhooks are https). */
+  NOTIFY_ALLOW_HTTP: bool(false),
+  TWILIO_ACCOUNT_SID: str(''),
+  TWILIO_AUTH_TOKEN: str(''),
+  /** E.164 number (+1419…) or a Messaging Service SID (MG…). */
+  TWILIO_FROM: str(''),
+  TWILIO_API_BASE: str('https://api.twilio.com'),
+  PUSHOVER_APP_TOKEN: str(''),
+  PUSHOVER_API_BASE: str('https://api.pushover.net'),
 
   // --- Bootstrap / security ---
   /** 32-byte base64 key that encrypts secrets stored in the database. Usually MAS_MASTER_KEY_FILE. */
@@ -191,7 +218,22 @@ export interface AppConfig {
     } | null;
   };
   map: { mode: 'tiles' | 'image'; tileUrl: string; attribution: string };
-  wall: { rotateSec: number; showMap: boolean };
+  notify: {
+    shadow: { enabled: boolean; channelKey: string; allowPaging: boolean };
+    quiet: {
+      window: { start: string; end: string } | null;
+      minPriority: 'P1' | 'P2' | 'P3' | 'P4';
+    };
+    escalateAfterMin: number;
+    pageRateLimit: number;
+    handoff: { isoWeekday: number; time: string };
+    selfAlertChannel: string;
+    allowHttp: boolean;
+    /** Null until SID, token and sender are all set. */
+    twilio: { accountSid: string; authToken: string; from: string; apiBase: string } | null;
+    pushover: { appToken: string; apiBase: string } | null;
+  };
+  wall: { rotateSec: number; showMap: boolean; pinP1: boolean };
   correlation: {
     windowSec: number;
     holddownSec: number;
@@ -348,6 +390,29 @@ export function loadConfig(
     err.issues = [{ key: 'MAP_TILE_URL', message: 'an http(s) URL with {z}, {x} and {y}' }];
     throw err;
   }
+  const fail = (key: string, message: string): never => {
+    const err = new ConfigError(`${key}: ${message}`);
+    err.issues = [{ key, message }];
+    throw err;
+  };
+  let quietWindow: { start: string; end: string } | null = null;
+  try {
+    quietWindow = parseQuietHours(e.NOTIFY_QUIET_HOURS);
+  } catch (err) {
+    fail('NOTIFY_QUIET_HOURS', (err as Error).message);
+  }
+  if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(e.ONCALL_HANDOFF_TIME))
+    fail('ONCALL_HANDOFF_TIME', 'use HH:MM, e.g. 08:00');
+  const twilioParts = [e.TWILIO_ACCOUNT_SID, e.TWILIO_AUTH_TOKEN, e.TWILIO_FROM];
+  if (twilioParts.some(Boolean)) {
+    if (!/^AC[0-9a-f]{32}$/i.test(e.TWILIO_ACCOUNT_SID))
+      fail('TWILIO_ACCOUNT_SID', 'the Account SID starts with AC followed by 32 characters');
+    if (!e.TWILIO_AUTH_TOKEN) fail('TWILIO_AUTH_TOKEN', 'required for Twilio');
+    if (!/^(\+[1-9]\d{7,14}|MG[0-9a-f]{32})$/i.test(e.TWILIO_FROM))
+      fail('TWILIO_FROM', 'an E.164 number (+14195550100) or a Messaging Service SID (MG…)');
+  }
+  for (const key of ['TWILIO_API_BASE', 'PUSHOVER_API_BASE'] as const)
+    if (!/^https?:\/\//.test(e[key])) fail(key, 'an http(s) URL');
   const baseUrl = (e.SWIS_BASE_URL ?? `https://${e.SWIS_HOST}:${e.SWIS_PORT}`).replace(/\/+$/, '');
 
   return {
@@ -427,7 +492,31 @@ export function loadConfig(
         : null,
     },
     map: { mode: e.MAP_MODE, tileUrl: e.MAP_TILE_URL, attribution: e.MAP_ATTRIBUTION },
-    wall: { rotateSec: e.WALL_ROTATE_SEC, showMap: e.WALL_SHOW_MAP },
+    notify: {
+      shadow: {
+        enabled: e.NOTIFY_SHADOW_MODE,
+        channelKey: e.NOTIFY_SHADOW_CHANNEL,
+        allowPaging: e.SHADOW_ALLOW_PAGING,
+      },
+      quiet: { window: quietWindow, minPriority: e.NOTIFY_QUIET_MIN_PRIORITY },
+      escalateAfterMin: e.ESCALATE_AFTER_MIN,
+      pageRateLimit: e.PAGE_RATE_LIMIT_PER_15MIN,
+      handoff: { isoWeekday: e.ONCALL_HANDOFF_DAY, time: e.ONCALL_HANDOFF_TIME },
+      selfAlertChannel: e.NOTIFY_SELF_ALERT_CHANNEL,
+      allowHttp: e.NOTIFY_ALLOW_HTTP,
+      twilio: e.TWILIO_ACCOUNT_SID
+        ? {
+            accountSid: e.TWILIO_ACCOUNT_SID,
+            authToken: e.TWILIO_AUTH_TOKEN,
+            from: e.TWILIO_FROM,
+            apiBase: e.TWILIO_API_BASE.replace(/\/+$/, ''),
+          }
+        : null,
+      pushover: e.PUSHOVER_APP_TOKEN
+        ? { appToken: e.PUSHOVER_APP_TOKEN, apiBase: e.PUSHOVER_API_BASE.replace(/\/+$/, '') }
+        : null,
+    },
+    wall: { rotateSec: e.WALL_ROTATE_SEC, showMap: e.WALL_SHOW_MAP, pinP1: e.WALL_PIN_P1 },
     correlation: {
       windowSec: e.CORRELATION_WINDOW_SEC,
       holddownSec: e.RESOLVE_HOLDDOWN_SEC,

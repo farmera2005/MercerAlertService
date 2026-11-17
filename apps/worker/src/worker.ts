@@ -9,6 +9,8 @@ import {
   loadConfig,
   loadOrCreateMasterKey,
   WRITEBACK_ACK_QUEUE,
+  NOTIFY_TEST_QUEUE,
+  notifyTestSchema,
   type AppConfig,
   type Logger,
   type SecretBox,
@@ -45,6 +47,16 @@ import {
 } from './setup-jobs';
 import { SiteResolver } from './site-resolver';
 import { runWritebackAck } from './writeback';
+import {
+  NOTIFY_QUEUE,
+  NOTIFY_TICK_SEC,
+  SELFCHECK_QUEUE,
+  runNotifyCycle,
+  runSelfCheck,
+  runTestSend,
+  type NotifyDeps,
+  type NotifySummary,
+} from './notify';
 import { SourceMonitor } from './source-monitor';
 
 export type WorkerMode = 'awaiting_setup' | 'monitoring' | 'config_error';
@@ -64,6 +76,8 @@ export interface Worker {
   pollOnce(name: PollerName): ReturnType<typeof runPoll>;
   /** Run one correlation cycle inline (tests, simulator). */
   correlateOnce(opts?: { reconcile?: boolean }): Promise<CycleSummary | null>;
+  notifyOnce(): Promise<NotifySummary>;
+  selfCheckOnce(): Promise<string[]>;
   health(): Promise<{ ok: boolean; details: Record<string, unknown> }>;
 }
 
@@ -242,6 +256,20 @@ export function createWorker(bootstrap: AppConfig, opts: WorkerOptions = {}): Wo
     return summary;
   }
 
+  const notifyDeps = (): NotifyDeps => ({ cfg, db: dbh.db, box, log, now });
+
+  /** Dispatch, escalate and send (also callable directly by the simulator and tests). */
+  async function notifyOnce(): Promise<NotifySummary> {
+    return runNotifyCycle(notifyDeps());
+  }
+
+  const kickNotify = () => {
+    if (stopping || !boss) return;
+    boss
+      .send(NOTIFY_QUEUE, {})
+      .catch((e: unknown) => log.error({ err: errorMessage(e) }, 'could not enqueue notify'));
+  };
+
   /** Apply a new config: rebuild the SWIS runtime / site resolver / tickers only where it changed. */
   async function apply(next: AppConfig): Promise<void> {
     const prev = cfg;
@@ -330,6 +358,8 @@ export function createWorker(bootstrap: AppConfig, opts: WorkerOptions = {}): Wo
       );
       listener.on('notification', (n) => {
         if (n.payload?.includes('"t":"config"')) scheduleReload();
+        // Acknowledged, snoozed or resolved in the dashboard: update Teams, cancel escalations.
+        else if (n.payload?.includes('"t":"incident"')) kickNotify();
       });
       await listener.connect();
       await listener.query(`LISTEN ${EVENTS_CHANNEL}`);
@@ -402,6 +432,8 @@ export function createWorker(bootstrap: AppConfig, opts: WorkerOptions = {}): Wo
     pollOnce,
     reloadConfig,
     correlateOnce,
+    notifyOnce,
+    selfCheckOnce: () => runSelfCheck(notifyDeps()),
 
     async start() {
       await reloadConfig();
@@ -466,7 +498,10 @@ export function createWorker(bootstrap: AppConfig, opts: WorkerOptions = {}): Wo
         expireInSeconds: 600,
       });
       await boss.work(CORRELATE_QUEUE, { pollingIntervalSeconds: 1 }, async () => {
-        if (mode === 'monitoring') await correlateOnce();
+        if (mode === 'monitoring') {
+          await correlateOnce();
+          kickNotify();
+        }
       });
       await boss.createQueue(RETENTION_QUEUE, {
         policy: 'singleton',
@@ -489,8 +524,31 @@ export function createWorker(bootstrap: AppConfig, opts: WorkerOptions = {}): Wo
         if (job) return runWritebackAck(job.data, cfg, dbh.db, log);
       });
 
+      // Notifications run in every mode: the outbox, escalations and test-sends don't need SWIS.
+      await boss.createQueue(NOTIFY_QUEUE, {
+        policy: 'stately',
+        retryLimit: 1,
+        expireInSeconds: 300,
+      });
+      await boss.work(NOTIFY_QUEUE, { pollingIntervalSeconds: 1 }, async () => {
+        await notifyOnce();
+      });
+      await boss.createQueue(SELFCHECK_QUEUE, { policy: 'singleton', retryLimit: 0 });
+      await boss.work(SELFCHECK_QUEUE, async () => {
+        await runSelfCheck(notifyDeps());
+      });
+      await boss.schedule(SELFCHECK_QUEUE, '* * * * *', {}, { tz: cfg.timezone });
+      await boss.createQueue(NOTIFY_TEST_QUEUE, { retryLimit: 0, expireInSeconds: 120 });
+      await boss.work(NOTIFY_TEST_QUEUE, { pollingIntervalSeconds: 0.5 }, async ([job]) => {
+        if (!job) return;
+        await reloadConfig();
+        const input = notifyTestSchema.parse(job.data);
+        return runTestSend(notifyDeps(), input.target, input.by);
+      });
+
       await listen();
       schedulePolls();
+      baseTimers.push(setInterval(kickNotify, NOTIFY_TICK_SEC * 1000));
       baseTimers.push(setInterval(() => void beat(), cfg.worker.heartbeatSec * 1000));
       log.info(
         { mode, swis: isSwisConfigured(cfg.swis) ? cfg.swis.baseUrl : null },

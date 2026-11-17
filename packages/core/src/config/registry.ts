@@ -81,6 +81,26 @@ export const SETTING_SECTIONS = {
     title: 'Wall display',
     description: 'How the NOC wall rotates between its views.',
   },
+  notify: {
+    title: 'Notifications',
+    description:
+      'Shadow mode, quiet hours and where MAS reports problems with itself. Teams channels, routing and on-call have their own tabs.',
+  },
+  paging: {
+    title: 'Paging & escalation',
+    description:
+      'When nobody acknowledges a page, MAS pages the next person, then the IT lead. The on-call week hands off at this day and time.',
+  },
+  twilio: {
+    title: 'Twilio SMS',
+    description:
+      'US SMS from an application needs A2P 10DLC registration or a verified toll-free number; start that early.',
+  },
+  pushover: {
+    title: 'Pushover',
+    description:
+      'Push notifications through a Pushover application (pushover.net → Create an Application).',
+  },
   health: {
     title: 'Self-monitoring',
     description: 'Heartbeats and the external dead-man’s switch.',
@@ -592,6 +612,144 @@ export const SETTINGS: readonly SettingDef[] = [
     max: 600,
   }),
   s({ key: 'WALL_SHOW_MAP', section: 'wall', label: 'Include the map view', kind: 'bool' }),
+  s({
+    key: 'WALL_PIN_P1',
+    section: 'wall',
+    label: 'Stay on the incident list while a P1 is open',
+    kind: 'bool',
+  }),
+
+  // notifications
+  s({
+    key: 'NOTIFY_SHADOW_MODE',
+    section: 'notify',
+    label: 'Shadow mode: send everything to the shadow channel and page nobody',
+    kind: 'bool',
+    help: 'Run MAS next to the existing SolarWinds e-mails for 2–4 weeks, then switch this off to go live.',
+  }),
+  s({
+    key: 'NOTIFY_SHADOW_CHANNEL',
+    section: 'notify',
+    label: 'Shadow channel (Teams channel key)',
+    kind: 'text',
+  }),
+  s({
+    key: 'SHADOW_ALLOW_PAGING',
+    section: 'notify',
+    label: 'Page the on-call person even in shadow mode',
+    kind: 'bool',
+    advanced: true,
+  }),
+  s({
+    key: 'NOTIFY_QUIET_HOURS',
+    section: 'notify',
+    label: 'Quiet hours (optional)',
+    kind: 'text',
+    placeholder: '22:00-06:00',
+    help: 'During quiet hours only the priorities below are notified, on every channel. Empty: no quiet hours.',
+  }),
+  s({
+    key: 'NOTIFY_QUIET_MIN_PRIORITY',
+    section: 'notify',
+    label: 'Notify during quiet hours',
+    kind: 'select',
+    options: [
+      { value: 'P1', label: 'P1 only' },
+      { value: 'P2', label: 'P1 and P2' },
+      { value: 'P3', label: 'P1 to P3' },
+      { value: 'P4', label: 'Everything (quiet hours have no effect)' },
+    ],
+  }),
+  s({
+    key: 'NOTIFY_SELF_ALERT_CHANNEL',
+    section: 'notify',
+    label: 'Channel for MAS problems (failing notifiers, backlogs)',
+    kind: 'text',
+    advanced: true,
+  }),
+  s({
+    key: 'NOTIFY_ALLOW_HTTP',
+    section: 'notify',
+    label: 'Allow http:// webhook URLs (testing with a local mock only)',
+    kind: 'bool',
+    danger: true,
+    advanced: true,
+  }),
+  s({
+    key: 'ESCALATE_AFTER_MIN',
+    section: 'paging',
+    label: 'Escalate when not acknowledged after (minutes)',
+    kind: 'int',
+    min: 1,
+    max: 240,
+    help: 'Default for routing rules that do not set their own.',
+  }),
+  s({
+    key: 'PAGE_RATE_LIMIT_PER_15MIN',
+    section: 'paging',
+    label: 'At most this many pages per person per 15 minutes',
+    kind: 'int',
+    min: 1,
+    max: 100,
+  }),
+  s({
+    key: 'ONCALL_HANDOFF_DAY',
+    section: 'paging',
+    label: 'On-call week starts on',
+    kind: 'select',
+    options: [
+      { value: '1', label: 'Monday' },
+      { value: '2', label: 'Tuesday' },
+      { value: '3', label: 'Wednesday' },
+      { value: '4', label: 'Thursday' },
+      { value: '5', label: 'Friday' },
+      { value: '6', label: 'Saturday' },
+      { value: '7', label: 'Sunday' },
+    ],
+  }),
+  s({
+    key: 'ONCALL_HANDOFF_TIME',
+    section: 'paging',
+    label: 'Handoff time',
+    kind: 'text',
+    placeholder: '08:00',
+  }),
+  s({
+    key: 'TWILIO_ACCOUNT_SID',
+    section: 'twilio',
+    label: 'Account SID',
+    kind: 'text',
+    placeholder: 'AC…',
+  }),
+  s({ key: 'TWILIO_AUTH_TOKEN', section: 'twilio', label: 'Auth token', kind: 'secret' }),
+  s({
+    key: 'TWILIO_FROM',
+    section: 'twilio',
+    label: 'Send from',
+    kind: 'text',
+    placeholder: '+14195550100 or MG…',
+    help: 'Your registered number, or a Messaging Service SID.',
+  }),
+  s({
+    key: 'TWILIO_API_BASE',
+    section: 'twilio',
+    label: 'API base URL',
+    kind: 'text',
+    advanced: true,
+  }),
+  s({
+    key: 'PUSHOVER_APP_TOKEN',
+    section: 'pushover',
+    label: 'Application API token',
+    kind: 'secret',
+  }),
+  s({
+    key: 'PUSHOVER_API_BASE',
+    section: 'pushover',
+    label: 'API base URL',
+    kind: 'text',
+    advanced: true,
+  }),
 
   // health
   s({

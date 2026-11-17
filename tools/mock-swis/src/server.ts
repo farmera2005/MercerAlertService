@@ -7,6 +7,7 @@ import {
 } from 'node:http';
 import { createServer as createHttps } from 'node:https';
 import { join } from 'node:path';
+import { createSinks, type Sinks } from './sinks';
 import { buildScenario, type OutageMode, type Scenario, type ScenarioEnv } from './scenarios';
 import { entityTables, executeSwql, SwqlError } from './swql';
 import { acknowledge, buildWorld, type Rec, type World } from './world';
@@ -39,6 +40,8 @@ export interface MockSwis {
   applyScenario(name: string, params?: Record<string, unknown>, untilSec?: number): Scenario;
   reset(): void;
   stats: { queries: number; invokes: number };
+  /** Notification sinks (Teams webhooks, Twilio, Pushover lookalikes). */
+  sinks: Sinks;
   close(): Promise<void>;
 }
 
@@ -84,6 +87,7 @@ export async function startMockSwis(opts: MockSwisOptions = {}): Promise<MockSwi
   let outage: OutageMode = 'none';
   const timers = new Set<NodeJS.Timeout>();
   const stats = { queries: 0, invokes: 0 };
+  const sinks = createSinks();
 
   const env: ScenarioEnv = {
     get world() {
@@ -99,8 +103,11 @@ export async function startMockSwis(opts: MockSwisOptions = {}): Promise<MockSwi
     const url = new URL(req.url ?? '/', 'http://mock');
     // ---- control API (dev only, no auth) ----
     if (url.pathname.startsWith('/__mock/')) {
-      const body = req.method === 'POST' ? JSON.parse((await readBody(req)) || '{}') : {};
       const path = url.pathname.slice('/__mock/'.length);
+      const raw = req.method === 'POST' ? await readBody(req) : '';
+      const sink = sinks.handle(req.method ?? 'GET', path, req.headers, raw);
+      if (sink) return send(res, sink[0], sink[1]);
+      const body = JSON.parse(raw || '{}');
       try {
         if (path === 'state') {
           return send(res, 200, {
@@ -239,6 +246,7 @@ export async function startMockSwis(opts: MockSwisOptions = {}): Promise<MockSwi
       for (const step of s.steps) if (step.atSec <= untilSec) step.apply(env, now());
       return s;
     },
+    sinks,
     reset() {
       for (const t of timers) clearTimeout(t);
       timers.clear();

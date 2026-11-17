@@ -37,6 +37,9 @@ for (const sim of list) {
   console.log(
     `      noise: ${r.noise.rawAlerts} raw alert raises → ${r.noise.incidents} incident(s)${r.noise.ratio ? ` = ${r.noise.ratio}:1` : ''}`,
   );
+  console.log(
+    `      routing: Teams ${r.notify.channels.map((c) => `#${c}`).join(', ') || 'none'} · ${r.notify.pages} page(s)${r.notify.escalations ? ` · ${r.notify.escalations} escalation(s)` : ''}`,
+  );
   for (const f of r.failures) console.log(`      ✗ ${f}`);
 }
 console.log(`\n${list.length - failed}/${list.length} scenarios passed`);

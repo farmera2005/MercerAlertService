@@ -20,7 +20,9 @@ COPY apps/worker/package.json apps/worker/
 COPY packages/core/package.json packages/core/
 COPY packages/db/package.json packages/db/
 COPY packages/swis/package.json packages/swis/
+COPY packages/notify/package.json packages/notify/
 COPY tools/mock-swis/package.json tools/mock-swis/
+COPY tools/simulator/package.json tools/simulator/
 RUN --mount=type=cache,id=pnpm,target=/pnpm/store with-build-ca pnpm install --frozen-lockfile
 
 # ---- build ----

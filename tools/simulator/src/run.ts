@@ -1,6 +1,15 @@
 import pg from 'pg';
-import { generateMasterKey, initLogger, loadConfig } from '@mercer/core';
-import { createDb, listIncidents, noiseStats, seedReferenceData, type DbHandle } from '@mercer/db';
+import { SecretBox, generateMasterKey, initLogger, loadConfig } from '@mercer/core';
+import {
+  createDb,
+  listIncidents,
+  listPeople,
+  noiseStats,
+  saveChannel,
+  savePerson,
+  seedReferenceData,
+  type DbHandle,
+} from '@mercer/db';
 import { runMigrations } from '@mercer/db/migrate';
 import { buildScenario, startMockSwis, type ScenarioEnv } from '@mercer/mock-swis';
 import { createWorker } from '@mercer/worker';
@@ -18,10 +27,17 @@ export interface IncidentSummary {
   seeded: boolean;
 }
 
+export interface NotifySummary {
+  channels: string[];
+  pages: number;
+  escalations: number;
+}
+
 export interface SimResult {
   scenario: SimScenario;
   incidents: IncidentSummary[];
   noise: { rawAlerts: number; incidents: number; ratio: number | null };
+  notify: NotifySummary;
   failures: string[];
   ms: number;
 }
@@ -54,8 +70,22 @@ export function check(
   expect: Expectation,
   incidents: IncidentSummary[],
   noise: SimResult['noise'],
+  notify?: NotifySummary,
 ): string[] {
   const failures: string[] = [];
+  if (expect.notify && notify) {
+    const want = [...expect.notify.channels].sort().join(', ');
+    const got = [...notify.channels].sort().join(', ');
+    if (want !== got) failures.push(`Teams channels: expected [${want}], got [${got}]`);
+    if (expect.notify.paged !== notify.pages > 0)
+      failures.push(
+        `paging: expected ${expect.notify.paged ? 'a page' : 'no page'}, got ${notify.pages}`,
+      );
+    if (expect.notify.escalated !== undefined && expect.notify.escalated !== notify.escalations > 0)
+      failures.push(
+        `escalation: expected ${expect.notify.escalated ? 'one' : 'none'}, got ${notify.escalations}`,
+      );
+  }
   const fresh = incidents.filter((i) => !i.seeded);
   if (fresh.length !== expect.incidents) {
     failures.push(
@@ -96,10 +126,35 @@ export async function runScenario(sim: SimScenario, databaseUrl: string): Promis
   let clock = t0 - 300_000; // baseline sync five minutes before the storm
   const now = () => new Date(clock);
   const mock = await startMockSwis({ port: 0, now });
+  const masterKey = generateMasterKey();
+  const system = { actorType: 'system' as const, actorLabel: 'simulator' };
+  // Default channels and rules, every channel pointed at the mock's Teams sink, everyone on SMS.
+  for (const key of ['net-critical', 'net-alerts', 'mas-shadow'])
+    await saveChannel(
+      h.db,
+      SecretBox.fromBase64(masterKey),
+      {
+        key,
+        name: key,
+        description: null,
+        enabled: true,
+        webhookUrl: `${mock.url}/__mock/sink/${key}`,
+      },
+      system,
+    );
+  for (const [i, p] of (await listPeople(h.db)).entries())
+    await savePerson(h.db, p.id, { ...p, pageVia: 'sms', phoneE164: `+1419555020${i}` }, system);
   const env = {
     NODE_ENV: 'test',
     DATABASE_URL: databaseUrl,
-    MAS_MASTER_KEY: generateMasterKey(),
+    MAS_MASTER_KEY: masterKey,
+    APP_BASE_URL: 'https://mas.example',
+    NOTIFY_SHADOW_MODE: 'false',
+    NOTIFY_ALLOW_HTTP: 'true',
+    TWILIO_ACCOUNT_SID: 'AC' + '0'.repeat(32),
+    TWILIO_AUTH_TOKEN: 'sim',
+    TWILIO_FROM: '+14195550100',
+    TWILIO_API_BASE: `${mock.url}/__mock/twilio`,
     LOG_LEVEL: 'silent',
     SWIS_BASE_URL: mock.url,
     SWIS_USERNAME: 'mas',
@@ -116,6 +171,8 @@ export async function runScenario(sim: SimScenario, databaseUrl: string): Promis
     for (const p of ['topology', 'nodes', 'interfaces', 'alerts', 'events'] as const)
       await worker.pollOnce(p);
     await worker.correlateOnce({ reconcile: true });
+    await worker.notifyOnce();
+    mock.sinks.clear();
 
     const scenario = buildScenario(sim.mock.name, sim.mock.params);
     const envForSteps: ScenarioEnv = {
@@ -137,6 +194,7 @@ export async function runScenario(sim: SimScenario, databaseUrl: string): Promis
       if (t % 60 === 0) await worker.pollOnce('nodes');
       if (t % 180 === 0) await worker.pollOnce('interfaces');
       await worker.correlateOnce({ reconcile: false });
+      await worker.notifyOnce();
     }
 
     const rows = await listIncidents(h.db, { limit: 500 });
@@ -153,11 +211,24 @@ export async function runScenario(sim: SimScenario, databaseUrl: string): Promis
       }))
       .sort((a, b) => a.id - b.id);
     const noise = await noiseStats(h.db, new Date(t0));
+    const smsBodies = mock.sinks.records
+      .filter((r) => r.sink === 'twilio')
+      .map((r) => String((r.body as { Body?: string }).Body ?? ''));
+    const notify: NotifySummary = {
+      channels: [
+        ...new Set(
+          mock.sinks.records.filter((r) => r.sink.startsWith('teams:')).map((r) => r.sink.slice(6)),
+        ),
+      ],
+      pages: smsBodies.filter((b) => !b.startsWith('RESOLVED')).length,
+      escalations: smsBodies.filter((b) => b.startsWith('ESCALATED')).length,
+    };
     return {
       scenario: sim,
       incidents,
       noise,
-      failures: check(sim.expect, incidents, noise),
+      notify,
+      failures: check(sim.expect, incidents, noise, notify),
       ms: Date.now() - started,
     };
   } finally {

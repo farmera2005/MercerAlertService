@@ -15,6 +15,15 @@ export interface Expectation {
   /** Raw alert raises per incident must be at least this. */
   minNoiseRatio?: number;
   titleIncludes?: string;
+  /** Routing with the default rules (shadow mode off, everyone reachable by SMS). */
+  notify?: {
+    /** Teams channels that received anything. */
+    channels: string[];
+    /** Somebody was paged (SMS/push other than the "resolved" notice). */
+    paged: boolean;
+    /** The page escalated to the next person. */
+    escalated?: boolean;
+  };
 }
 
 export interface SimScenario {
@@ -49,15 +58,25 @@ export const SCENARIOS: SimScenario[] = [
       finalStatus: 'resolved',
       minNoiseRatio: 30,
       titleIncludes: 'Site down — Rockford Elevator',
+      // Nobody acknowledges in the simulator, so the page escalates at 15 min, before recovery.
+      notify: { channels: ['net-critical'], paged: true, escalated: true },
     },
   },
   {
     id: 'wan-down-march-night',
-    description: 'The same outage in March after hours is less urgent',
+    description:
+      'The same outage in March after hours is P2, still paged after hours, and escalates when nobody acknowledges',
     start: MARCH_NIGHT,
     mock: { name: 'site-wan-down', params: { site: 'ROCK', childAlerts: 30 } },
-    durationSec: 300,
-    expect: { incidents: 1, kind: 'site_outage', priority: 'P2', minAlerts: 31, minNoiseRatio: 30 },
+    durationSec: 1200,
+    expect: {
+      incidents: 1,
+      kind: 'site_outage',
+      priority: 'P2',
+      minAlerts: 31,
+      minNoiseRatio: 30,
+      notify: { channels: ['net-critical'], paged: true, escalated: true },
+    },
   },
   {
     id: 'flapping-ap',
@@ -65,7 +84,13 @@ export const SCENARIOS: SimScenario[] = [
     start: HARVEST_DAY,
     mock: { name: 'flapping-ap', params: { node: 'ROCK-AP01', flaps: 6, periodSec: 60 } },
     durationSec: 420,
-    expect: { incidents: 1, kind: 'flapping', priority: 'P3', titleIncludes: 'ROCK-AP01 flapping' },
+    expect: {
+      incidents: 1,
+      kind: 'flapping',
+      priority: 'P3',
+      titleIncludes: 'ROCK-AP01 flapping',
+      notify: { channels: ['net-alerts'], paged: false },
+    },
   },
   {
     id: 'ups-on-battery-harvest',
@@ -79,6 +104,7 @@ export const SCENARIOS: SimScenario[] = [
       priority: 'P2',
       finalStatus: 'resolved',
       titleIncludes: 'UPS on battery',
+      notify: { channels: ['net-critical'], paged: false },
     },
   },
   {
@@ -102,6 +128,7 @@ export const SCENARIOS: SimScenario[] = [
       kind: 'interface',
       priority: 'P3',
       titleIncludes: 'High interface utilization',
+      notify: { channels: ['net-alerts'], paged: false },
     },
   },
   {
@@ -116,6 +143,7 @@ export const SCENARIOS: SimScenario[] = [
       priority: 'P1',
       finalStatus: 'resolved',
       titleIncludes: 'SolarWinds monitoring unavailable',
+      notify: { channels: ['net-critical'], paged: true },
     },
   },
 ];

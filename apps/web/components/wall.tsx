@@ -143,6 +143,7 @@ export function WallScreen({
   tz,
   rotateSec,
   showMap,
+  pinP1,
   counts,
   sites,
   incidents,
@@ -152,6 +153,7 @@ export function WallScreen({
   tz: string;
   rotateSec: number;
   showMap: boolean;
+  pinP1: boolean;
   counts: Record<string, number>;
   sites: WallSite[];
   incidents: WallIncident[];
@@ -159,13 +161,18 @@ export function WallScreen({
   mapSites: MapSite[];
 }) {
   const live = useLive();
+  // While a P1 is open the room should see it, not the map.
+  const pinned = pinP1 && incidents.some((i) => i.priority === 'P1');
   const views = useMemo<View[]>(
-    () => [
-      ...(incidents.length ? (['incidents'] as const) : []),
-      'sites',
-      ...(showMap ? (['map'] as const) : []),
-    ],
-    [incidents.length, showMap],
+    () =>
+      pinned
+        ? ['incidents']
+        : [
+            ...(incidents.length ? (['incidents'] as const) : []),
+            'sites',
+            ...(showMap ? (['map'] as const) : []),
+          ],
+    [pinned, incidents.length, showMap],
   );
   const [idx, setIdx] = useState(0);
   const view = views[idx % views.length]!;

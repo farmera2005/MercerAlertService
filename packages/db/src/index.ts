@@ -25,3 +25,5 @@ export * from './repo/kiosk';
 export * from './repo/assets';
 export * from './repo/incident-actions';
 export * from './repo/dashboard';
+export * from './repo/notify-admin';
+export * from './repo/notify';

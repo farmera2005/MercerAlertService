@@ -35,7 +35,7 @@ Design rules. Every later decision follows from these:
 | `worker`          | Node (long-running)            | SWIS polling, correlation, scoring, AI calls, notifications, escalations, digests, retention, self-monitoring, heartbeat. Exposes `:9090/healthz` for the container healthcheck.                    |
 | `web`             | Next.js (App Router)           | IT dashboard (Entra SSO), admin, "Ask the network" chat API, SSE streams, `/wall` kiosk, `/api/health`. **Does no polling.**                                                                        |
 | `backup`          | postgres:16-alpine + cron loop | Nightly `pg_dump -Fc` to the `backups` volume, with rotation.                                                                                                                                       |
-| `mock-swis`       | Node (dev/CI profile only)     | Fake SWIS that serves a synthetic Mercer-like world or recorded fixtures, with a control API for scenarios.                                                                                         |
+| `mock-swis`       | Node (dev/CI profile only)     | Fake SWIS that serves a synthetic Mercer-like world or recorded fixtures, with a control API for scenarios, plus Teams/Twilio/Pushover sinks for notification tests.                                |
 
 Monorepo packages (pnpm workspaces, TypeScript everywhere):
 
@@ -145,22 +145,22 @@ active job per queue. A slow SWIS therefore can never pile up overlapping polls,
 several worker replicas cannot double-poll. Wall-clock jobs use pg-boss cron with the
 `America/New_York` time zone.
 
-| Queue                             | Trigger                                                                                                             | Policy    | Milestone                        |
-| --------------------------------- | ------------------------------------------------------------------------------------------------------------------- | --------- | -------------------------------- |
-| `swis.poll.alerts`                | every 30 s                                                                                                          | stately   | M1                               |
-| `swis.poll.nodes`                 | every 60 s                                                                                                          | stately   | M1                               |
-| `swis.poll.interfaces`            | every 180 s                                                                                                         | stately   | M1                               |
-| `swis.poll.events`                | every 300 s                                                                                                         | stately   | M1                               |
-| `swis.poll.topology`              | every 3600 s, and at startup                                                                                        | stately   | M1                               |
-| `maint.retention`                 | cron `15 3 * * *` ET                                                                                                | singleton | M1                               |
-| `correlate.run`                   | after any poll that produced transitions, plus every 30 s (lifecycle: hold-down, reopen/close, snooze, maintenance) | stately   | M2 ✓                             |
-| `swis.writeback.ack`              | when someone acknowledges in MAS and `SWIS_WRITEBACK_ENABLED` is on (2 retries)                                     | standard  | M3 ✓                             |
-| `notify.dispatch` / `notify.send` | on incident open or material change; retries with backoff                                                           | standard  | M4                               |
-| `notify.escalate`                 | delayed job (`startAfter` = ack timeout)                                                                            | standard  | M4                               |
-| `ai.incident.summary`             | debounced per incident (`singletonKey`, 45 s)                                                                       | standard  | M5                               |
-| `ai.digest.daily`                 | cron `0 7 * * *` ET (configurable)                                                                                  | singleton | M5                               |
-| `ai.digest.weekly`                | cron `30 7 * * 1` ET                                                                                                | singleton | M5                               |
-| `maint.selfcheck`                 | every 60 s: queue backlog, notifier health, SWIS errors                                                             | stately   | M1 (heartbeat), M4 (self-alerts) |
+| Queue                  | Trigger                                                                                                                 | Policy    | Milestone |
+| ---------------------- | ----------------------------------------------------------------------------------------------------------------------- | --------- | --------- |
+| `swis.poll.alerts`     | every 30 s                                                                                                              | stately   | M1        |
+| `swis.poll.nodes`      | every 60 s                                                                                                              | stately   | M1        |
+| `swis.poll.interfaces` | every 180 s                                                                                                             | stately   | M1        |
+| `swis.poll.events`     | every 300 s                                                                                                             | stately   | M1        |
+| `swis.poll.topology`   | every 3600 s, and at startup                                                                                            | stately   | M1        |
+| `maint.retention`      | cron `15 3 * * *` ET                                                                                                    | singleton | M1        |
+| `correlate.run`        | after any poll that produced transitions, plus every 30 s (lifecycle: hold-down, reopen/close, snooze, maintenance)     | stately   | M2 ✓      |
+| `swis.writeback.ack`   | when someone acknowledges in MAS and `SWIS_WRITEBACK_ENABLED` is on (2 retries)                                         | standard  | M3 ✓      |
+| `notify.run`           | after each correlation cycle, when the dashboard changes an incident, and every 15 s: dispatch, due escalations, outbox | stately   | M4 ✓      |
+| `notify.test`          | Settings → Send test (the web request waits for the result)                                                             | standard  | M4 ✓      |
+| `ai.incident.summary`  | debounced per incident (`singletonKey`, 45 s)                                                                           | standard  | M5        |
+| `ai.digest.daily`      | cron `0 7 * * *` ET (configurable)                                                                                      | singleton | M5        |
+| `ai.digest.weekly`     | cron `30 7 * * 1` ET                                                                                                    | singleton | M5        |
+| `maint.selfcheck`      | every 60 s: failing notifiers, overdue outbox, correlation backlog                                                      | singleton | M4 ✓      |
 
 ## 5. SWIS integration
 
@@ -288,16 +288,17 @@ P1 ≥ 70 · P2 ≥ 50 · P3 ≥ 30 · else P4; "Monitoring source down" is alwa
 ```
 
 Settings → Correlation shows live examples computed from the saved settings. The simulator
-(`pnpm simulate`) asserts these outcomes end to end:
+(`pnpm simulate`) asserts these outcomes end to end, through the real pollers, correlation,
+notification dispatcher and HTTP delivery to the mock's Teams and Twilio sinks:
 
-| Scenario                                                    | Result                                                                       |
-| ----------------------------------------------------------- | ---------------------------------------------------------------------------- |
-| Rockford FortiGate down with 30 child alerts, October 10:00 | **1** site outage, **P1**, 31 alerts, resolved after recovery, 31:1          |
-| Same outage in March at 22:00                               | **1** site outage, **P2**                                                    |
-| Flapping AP (6 bounces in 6 min)                            | **1** flapping incident, **P3**                                              |
-| UPS on battery at Coldwater in harvest                      | **1** power incident, **P2**                                                 |
-| HQ WAN link ramps to 98 %                                   | **1** interface incident, **P3**                                             |
-| SWIS returns 503 for 5 min                                  | **1** "SolarWinds monitoring unavailable", **P1**, resolved after it returns |
+| Scenario                                                    | Incident                                                                     | Routing (default rules, nobody acknowledges)      |
+| ----------------------------------------------------------- | ---------------------------------------------------------------------------- | ------------------------------------------------- |
+| Rockford FortiGate down with 30 child alerts, October 10:00 | **1** site outage, **P1**, 31 alerts, resolved after recovery, 31:1          | #net-critical; on-call paged; escalated at 15 min |
+| Same outage in March at 22:00                               | **1** site outage, **P2**                                                    | #net-critical; paged (P2 after hours); escalated  |
+| Flapping AP (6 bounces in 6 min)                            | **1** flapping incident, **P3**                                              | #net-alerts; no page                              |
+| UPS on battery at Coldwater in harvest                      | **1** power incident, **P2**                                                 | #net-critical; no page (business hours)           |
+| HQ WAN link ramps to 98 %                                   | **1** interface incident, **P3**                                             | #net-alerts; no page                              |
+| SWIS returns 503 for 5 min                                  | **1** "SolarWinds monitoring unavailable", **P1**, resolved after it returns | #net-critical; paged                              |
 
 The **recovery target** is shown on each incident: 4 h for harvest-critical sites during
 harvest, 8 h otherwise.
@@ -340,26 +341,72 @@ Each task's model can be overridden with `AI_MODEL_<TASK>`.
   are replaced with stable placeholders (`[IP-3]`) before the call and restored locally
   for display. Hostnames and site names are sent.
 
-## 9. Notifications (M4 design summary)
+## 9. Notifications (implemented in M4)
 
-- The `Notifier` interface has `send(message) → {providerRef, threadRef?}` and
-  `update(threadRef, message)`. The Teams Workflows provider posts Adaptive Cards
-  (priority color, title, site and division, summary, alert count, duration, and
-  `Action.OpenUrl` for Ack, Snooze and View). A Workflows webhook doesn't return a
-  message ID, so updates are posted as follow-up cards tagged `INC-1234 · Update n`. The
-  README also includes an optional flow design that returns the message ID, which lets
-  the flow reply in-thread. A phase-2 Teams bot (`Action.Execute`) plugs into the same
-  interface.
-- SMS goes through Twilio, and push through Pushover. Defaults: P1 always, and P2
-  outside business hours. Messages go to the current on-call person (weekly rotation
-  table) and are under 300 characters, with a short link (`/i/<code>`). If an incident is
-  not acked in 15 min, it escalates to the next person, then to the IT lead.
-- Every attempt is recorded in `notifications`, with retries and backoff. If a provider
-  fails repeatedly, a dashboard banner appears and an internal self-alert is posted to
-  the other channel.
-- Quiet hours, maintenance windows and **shadow mode** apply to all channels. In shadow
-  mode, every message is redirected to `TEAMS_SHADOW_WEBHOOK` and labeled `[SHADOW]`, and
-  no SMS or push is sent unless `SHADOW_ALLOW_SMS=true`.
+**Decisions are pure.** `planDispatch(incident, whatWasAnnounced, context)` in
+`packages/core/src/notify` decides every message (and `planEscalation` every escalation); the
+worker only records and sends. The planner sees deterministic incident fields only, never AI
+output, so AI cannot decide whether something is delivered.
+
+**What triggers a message.** The dispatcher compares each incident with what was already
+announced (`incident_notify_state`) and reacts to the difference:
+
+| Change                                               | Teams                                 | SMS / push                                                             |
+| ---------------------------------------------------- | ------------------------------------- | ---------------------------------------------------------------------- |
+| Opened (not pre-existing)                            | Card to the routed channels           | Page the on-call primary if a rule says so                             |
+| Pre-existing incident becomes real (new alerts join) | Treated as opened                     | As opened                                                              |
+| Priority or kind changed                             | `INC-12 · Update n: Priority P3 → P1` | Page if it just became page-worthy                                     |
+| Acknowledged / un-acknowledged                       | Update                                | Pending escalations cancelled                                          |
+| Snoozed                                              | Update                                | Escalations cancelled; when the snooze ends unacknowledged, page again |
+| Resolved                                             | Resolved card                         | Short "RESOLVED … after 42 min" to everyone who was paged              |
+| Reopened                                             | Update                                | Page again                                                             |
+
+Running the planner twice with nothing new produces nothing, so a missed trigger is caught by
+the next tick. Pre-existing incidents found at startup are never announced.
+
+**Routing** (Settings → Routing) is an ordered rule list: match priorities, kinds, divisions,
+sites and business/after hours (the site's hours, harvest hours in harvest); post to a Teams
+channel and/or page on-call with an escalation delay; optionally stop. The defaults: P1–P2 to
+`#net-critical`, P3–P4 to `#net-alerts`, page for every P1 and for P2 after business hours.
+
+**On-call** (Settings → On-call): people in rotation order hand off weekly (Monday 08:00 ET by
+default); any week can be assigned explicitly; time-boxed cover replaces the primary. Escalation
+goes primary → secondary → IT lead(s), each after the rule's delay (15 min default), skipping
+empty levels and nobody twice.
+
+**Suppression** is recorded, not silent. A message is stored with `status = suppressed` and a
+reason: maintenance window, quiet hours (`NOTIFY_QUIET_HOURS`, below `NOTIFY_QUIET_MIN_PRIORITY`),
+shadow mode, the per-person rate limit (`PAGE_RATE_LIMIT_PER_15MIN`), no contact details, or a
+channel or provider that is not set up. The incident page lists every notification and why it
+was or was not sent.
+
+**Shadow mode** (`NOTIFY_SHADOW_MODE`, **on** by default) posts one card per event to the shadow
+channel (`#mas-shadow`), marked `[SHADOW]` with the channels it would have reached and who would
+have been paged; no SMS or push goes out unless `SHADOW_ALLOW_PAGING`. Test-sends always go to
+the chosen target.
+
+**Delivery: the outbox.** `notifications` is also the queue. The sender claims due `queued`
+rows (`FOR UPDATE SKIP LOCKED`, with a 2-minute lease so a crashed sender's rows are retried),
+sends them, and marks them `sent`, requeues with backoff (30 s, 1, 2, 5, 10 min) or marks them
+`failed` for permanent errors (a 4xx, a refused Pushover key). Contacts are read at send time, so
+a corrected number takes effect for queued pages. Escalations are rows with a due time, fired by
+the same pass. One pass (`notify.run`) runs after every correlation cycle, whenever the
+dashboard changes an incident (`pg_notify`), and every 15 s.
+
+**Providers** (`packages/notify`, behind a `Notifier` interface): Teams Workflows webhooks
+(Adaptive Card 1.4 posted to "When a Teams webhook request is received"; not the retired
+Office 365 connectors), Twilio SMS (number or Messaging Service), Pushover (high priority for
+pages). Buttons are `Action.OpenUrl` links to the dashboard (`?do=ack`, `?do=snooze`), which ask
+for confirmation: a link preview cannot ack anything. Workflows cannot edit a posted card, so
+updates are follow-up cards; the interface has `updatesInPlace` / `inCardActions` capabilities
+for a phase-2 Teams bot with `Action.Execute`. SMS stays under 300 characters with a `/i/<code>`
+short link. Webhook URLs are sealed with the master key, never returned to the browser, never
+logged (provider errors are scrubbed of URLs) and audited only as `[set]`.
+
+**MAS alerts on itself** (`maint.selfcheck`, every minute): a Teams channel or provider that has
+failed 3 times in a row, notifications overdue by more than 5 minutes, or more than 5,000
+uncorrelated transitions raise a self-alert on the self-alert channel (or any other working
+channel), at most hourly each, and a banner on every dashboard page.
 
 ## 10. Web, live updates and the wall (implemented in M3)
 
@@ -511,16 +558,19 @@ sequenceDiagram
 
 ## 12. Key decisions
 
-| Decision                                           | Why                                                                                                                                                                                                                                                                                                        |
-| -------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Drizzle** over Prisma                            | SQL-first schema in TypeScript, shared by `web` and `worker`, with no query-engine binary, which keeps Docker images small. Migrations are plain, reviewable SQL. Time-series and `ON CONFLICT` upserts with running aggregates are easy to write. It also fits pg-boss, which lives in the same Postgres. |
-| **pg-boss** (no Redis)                             | It is already in Postgres. `stately` queues give non-overlapping polls, `singletonKey` debounces AI jobs, delayed jobs handle escalation, and cron with a time zone runs digests. One fewer service to run.                                                                                                |
-| Interval ticks + stately queues for polls          | pg-boss cron is minute-granular, but alerts need 30 s. Ticks enqueue, and the stately policy deduplicates across replicas.                                                                                                                                                                                 |
-| SSE over LISTEN/NOTIFY                             | Real-time without extra infrastructure. Payloads stay small, and clients refetch over normal authenticated routes.                                                                                                                                                                                         |
-| Structured outputs instead of forced tool calls    | Current Claude models reject forced `tool_choice`. JSON-schema output plus Zod gives the same guarantee.                                                                                                                                                                                                   |
-| **Node 22+** (images use Node 24 LTS)              | Node 20 reached end of life in April 2026. pg-boss 12 and undici 8 require Node ≥ 22.                                                                                                                                                                                                                      |
-| TypeScript 5.9 (pinned)                            | TS 7 (the native compiler) isn't supported yet by typescript-eslint or Next tooling.                                                                                                                                                                                                                       |
-| Settings in the DB, encrypted (not `.env`)         | The requirement is set-up completely online with no config files. Secrets are sealed with a key that lives outside the DB, so a dump alone exposes nothing. Env vars still win for IaC.                                                                                                                    |
-| Auth.js v5 (pinned beta) with a per-request config | v5 is the release built for the App Router, and its lazy configuration lets Microsoft sign-in be set up in the browser (settings in the DB, session key derived from the master key). v4 would need the client secret in an environment variable. Pinned exactly because it is still tagged beta.          |
-| Socket peer address via an `http.Server` hook      | Next.js keeps a client-supplied `X-Forwarded-For`, so without a proxy the real address is lost and IP allowlists would be spoofable. The hook is a few lines in `instrumentation.ts`, needs no custom server, and fails closed (no address) if it is ever not active.                                      |
-| Leaflet over MapLibre                              | We only need raster OSM and an offline image overlay (`CRS.Simple`). It is lighter and simpler.                                                                                                                                                                                                            |
+| Decision                                                          | Why                                                                                                                                                                                                                                                                                                        |
+| ----------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Drizzle** over Prisma                                           | SQL-first schema in TypeScript, shared by `web` and `worker`, with no query-engine binary, which keeps Docker images small. Migrations are plain, reviewable SQL. Time-series and `ON CONFLICT` upserts with running aggregates are easy to write. It also fits pg-boss, which lives in the same Postgres. |
+| **pg-boss** (no Redis)                                            | It is already in Postgres. `stately` queues give non-overlapping polls, `singletonKey` debounces AI jobs, delayed jobs handle escalation, and cron with a time zone runs digests. One fewer service to run.                                                                                                |
+| Interval ticks + stately queues for polls                         | pg-boss cron is minute-granular, but alerts need 30 s. Ticks enqueue, and the stately policy deduplicates across replicas.                                                                                                                                                                                 |
+| SSE over LISTEN/NOTIFY                                            | Real-time without extra infrastructure. Payloads stay small, and clients refetch over normal authenticated routes.                                                                                                                                                                                         |
+| Structured outputs instead of forced tool calls                   | Current Claude models reject forced `tool_choice`. JSON-schema output plus Zod gives the same guarantee.                                                                                                                                                                                                   |
+| **Node 22+** (images use Node 24 LTS)                             | Node 20 reached end of life in April 2026. pg-boss 12 and undici 8 require Node ≥ 22.                                                                                                                                                                                                                      |
+| TypeScript 5.9 (pinned)                                           | TS 7 (the native compiler) isn't supported yet by typescript-eslint or Next tooling.                                                                                                                                                                                                                       |
+| Settings in the DB, encrypted (not `.env`)                        | The requirement is set-up completely online with no config files. Secrets are sealed with a key that lives outside the DB, so a dump alone exposes nothing. Env vars still win for IaC.                                                                                                                    |
+| Auth.js v5 (pinned beta) with a per-request config                | v5 is the release built for the App Router, and its lazy configuration lets Microsoft sign-in be set up in the browser (settings in the DB, session key derived from the master key). v4 would need the client secret in an environment variable. Pinned exactly because it is still tagged beta.          |
+| Socket peer address via an `http.Server` hook                     | Next.js keeps a client-supplied `X-Forwarded-For`, so without a proxy the real address is lost and IP allowlists would be spoofable. The hook is a few lines in `instrumentation.ts`, needs no custom server, and fails closed (no address) if it is ever not active.                                      |
+| Notifications outbox in Postgres, not one pg-boss job per message | The table is both the record the dashboard shows and the queue, so they can never disagree. Retries, backoff and leases are plain columns, and the simulator can drive it on a virtual clock.                                                                                                              |
+| Escalations as due-time rows, not delayed jobs                    | Cancelling on ack is an UPDATE; a restart loses nothing; the planner can re-check the incident at fire time; the simulator's virtual clock works.                                                                                                                                                          |
+| Shadow mode on by default                                         | A fresh install never pages anyone by surprise. Turning it off is the deliberate go-live step after the pilot.                                                                                                                                                                                             |
+| Leaflet over MapLibre                                             | We only need raster OSM and an offline image overlay (`CRS.Simple`). It is lighter and simpler.                                                                                                                                                                                                            |

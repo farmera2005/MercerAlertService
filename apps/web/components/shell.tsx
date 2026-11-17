@@ -1,6 +1,6 @@
 import Link from 'next/link';
 import type { ReactNode } from 'react';
-import { listHeartbeats, listPollerStates } from '@mercer/db';
+import { listHeartbeats, listNotifierHealth, listPollerStates } from '@mercer/db';
 import { logoutAction } from '@/app/actions/auth';
 import type { CurrentUser } from '@/lib/auth';
 import { liveInitial } from '@/lib/live-initial';
@@ -10,7 +10,7 @@ import { LiveDot, LiveProvider, StaleBanner } from './live';
 import { NavLinks } from './nav-links';
 
 interface Banner {
-  tone: 'error' | 'warning';
+  tone: 'error' | 'warning' | 'info';
   text: ReactNode;
 }
 
@@ -30,10 +30,48 @@ async function systemBanners(user: CurrentUser): Promise<Banner[]> {
         </>
       ),
     });
-  const [beats, pollers] = await Promise.all([
+  const cfg = state.cfg ?? server().bootstrap;
+  if (cfg.notify.shadow.enabled)
+    out.push({
+      tone: 'info',
+      text: (
+        <>
+          Shadow mode: notifications go only to #{cfg.notify.shadow.channelKey} and nobody is paged.
+          {user.isAdmin && (
+            <>
+              {' '}
+              <Link className="underline" href="/settings/notifications">
+                Notification settings
+              </Link>
+            </>
+          )}
+        </>
+      ),
+    });
+  const [beats, pollers, notifiers] = await Promise.all([
     listHeartbeats(server().db.db),
     listPollerStates(server().db.db),
+    listNotifierHealth(server().db.db),
   ]);
+  for (const n of notifiers)
+    if (n.consecutiveFailures >= 3 && !['outbox', 'correlation-backlog'].includes(n.key))
+      out.push({
+        tone: 'error',
+        text: (
+          <>
+            Notifications via {n.key.replace('teams:', '#')} are failing ({n.consecutiveFailures} in
+            a row{n.lastError ? `: ${n.lastError.slice(0, 140)}` : ''}).
+            {user.isAdmin && (
+              <>
+                {' '}
+                <Link className="underline" href="/settings/notifications">
+                  Check the settings
+                </Link>
+              </>
+            )}
+          </>
+        ),
+      });
   const swis = beats.find((b) => b.component === 'swis');
   if ((swis?.details as { tlsVerification?: string } | undefined)?.tlsVerification === 'DISABLED')
     out.push({
@@ -85,7 +123,7 @@ export async function Shell({
           <div
             key={i}
             role={b.tone === 'error' ? 'alert' : 'status'}
-            className={`border-b px-6 py-2 text-sm ${b.tone === 'error' ? 'border-red-500/40 bg-red-500/15 text-red-100' : 'border-amber-500/40 bg-amber-500/10 text-amber-100'}`}
+            className={`border-b px-6 py-2 text-sm ${b.tone === 'error' ? 'border-red-500/40 bg-red-500/15 text-red-100' : b.tone === 'warning' ? 'border-amber-500/40 bg-amber-500/10 text-amber-100' : 'border-sky-500/30 bg-sky-500/10 text-sky-100'}`}
           >
             <div className={`mx-auto ${width}`}>{b.text}</div>
           </div>

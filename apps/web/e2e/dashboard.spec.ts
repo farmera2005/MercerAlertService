@@ -10,6 +10,8 @@ const admin = {
   password: process.env.E2E_ADMIN_PASSWORD ?? 'correct-horse-battery-staple',
 };
 const control = process.env.E2E_MOCK_CONTROL_URL ?? 'http://127.0.0.1:17774';
+/** The mock as the worker reaches it (inside Docker: http://mock-swis:17774). */
+const swisUrl = process.env.E2E_SWIS_URL ?? 'http://mock-swis:17774';
 
 test.describe.configure({ mode: 'serial' });
 
@@ -71,6 +73,9 @@ test('an incident can be acknowledged and it is audited', async ({ page }) => {
   );
   await expect(page.getByRole('button', { name: 'Un-acknowledge' })).toBeVisible();
 
+  // Shadow mode is on by default: the shadow post is recorded, and nobody is paged.
+  await expect(page.getByTestId('notification-log')).toContainText('#mas-shadow (shadow)');
+
   await page.goto('/settings/audit?action=incident.');
   await expect(page.getByRole('cell', { name: 'incident.ack' }).first()).toBeVisible();
 });
@@ -117,4 +122,39 @@ test('the wall shows a valid link without signing in and refuses others', async 
   await wall.reload();
   await expect(wall.getByRole('heading', { name: 'This wall link is not valid' })).toBeVisible();
   await kiosk.close();
+});
+
+test('a Teams channel can be set up and test-sent from Settings', async ({ page }) => {
+  await signIn(page);
+  await fetch(`${control}/__mock/sink`, { method: 'DELETE' });
+  await page.goto('/settings/notifications');
+  await expect(page.getByText('Shadow mode is on')).toBeVisible();
+
+  // The mock's sink speaks plain http, which must be allowed explicitly.
+  await page.locator('details:has(#f-NOTIFY_ALLOW_HTTP) > summary').click();
+  await page.locator('#f-NOTIFY_ALLOW_HTTP').check();
+  await page.getByRole('button', { name: 'Save notification settings' }).click();
+  await expect(page.getByText(/^Saved\.$/).first()).toBeVisible();
+
+  const row = page.getByTestId('channel-net-alerts');
+  await row.locator('summary', { hasText: 'Edit' }).click();
+  await row.locator('input[name=webhookUrl]').fill(`${swisUrl}/__mock/sink/net-alerts`);
+  await row.getByRole('button', { name: 'Save' }).click();
+  await expect(row.getByText('Saved.')).toBeVisible();
+  await expect(row.getByText('webhook set')).toBeVisible();
+  await row.getByRole('button', { name: 'Send test' }).click();
+  await expect(row.getByText('Sent to #net-alerts.')).toBeVisible({ timeout: 45_000 });
+
+  const sink = (await (await fetch(`${control}/__mock/sink`)).json()) as {
+    records: Array<{ sink: string; body: unknown }>;
+  };
+  const posted = sink.records.filter((r) => r.sink === 'teams:net-alerts');
+  expect(posted).toHaveLength(1);
+  expect(JSON.stringify(posted[0]!.body)).toContain('MercerAlertService test message');
+
+  // The URL is never shown again, and the audit row does not contain it.
+  await expect(page.locator(`text=${swisUrl}/__mock/sink`)).toHaveCount(0);
+  await page.goto('/settings/audit?action=notify.');
+  await expect(page.getByRole('cell', { name: 'notify.channel.update' }).first()).toBeVisible();
+  await expect(page.locator('body')).not.toContainText('/__mock/sink/net-alerts');
 });

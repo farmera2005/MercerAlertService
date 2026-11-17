@@ -135,6 +135,9 @@ importers:
       '@mercer/db':
         specifier: workspace:*
         version: link:../../packages/db
+      '@mercer/notify':
+        specifier: workspace:*
+        version: link:../../packages/notify
       '@mercer/swis':
         specifier: workspace:*
         version: link:../../packages/swis
@@ -216,6 +219,19 @@ importers:
       tsx:
         specifier: ^4.23.15
         version: 4.23.15
+      typescript:
+        specifier: ~5.9.3
+        version: 5.9.3
+
+  packages/notify:
+    dependencies:
+      '@mercer/core':
+        specifier: workspace:*
+        version: link:../core
+    devDependencies:
+      '@types/node':
+        specifier: ^22.19.0
+        version: 22.20.5
       typescript:
         specifier: ~5.9.3
         version: 5.9.3

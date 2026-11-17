@@ -100,6 +100,10 @@ docker compose up -d         # full stack, no .env needed; add --profile dev for
 - **Incident actions** by people go through `applyIncidentAction()` (`@mercer/db`): it takes the
   correlator's advisory lock, writes the incident event and the audit row, and publishes the
   change. Don't update `incidents` from the web app any other way.
+- **Notifications** are decided by `planDispatch()` / `planEscalation()` in
+  `packages/core/src/notify` (pure, unit-tested) and sent only by the worker through the
+  `notifications` outbox. Never send from the web app (test-sends are a worker job), never log
+  or return a webhook URL, and record a suppressed message with its reason instead of dropping it.
 - **Client components** never import the `@mercer/core` root (it pulls in Node modules). Pass
   plain data from the server component, or use the browser-safe `@mercer/core/events`.
 - **The wall** shows only titles, short summaries and site names: run text through
