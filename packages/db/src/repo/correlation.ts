@@ -124,6 +124,7 @@ function toIncident(r: IncidentRow, members: Map<string, MemberRole>): IncidentS
     inMaintenance: r.inMaintenance,
     seeded: r.seeded,
     aiPriorityAdjust: r.aiPriorityAdjust,
+    aiPriorityBasis: r.aiPriorityBasis,
     members,
   };
 }

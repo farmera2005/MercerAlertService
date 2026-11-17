@@ -44,6 +44,11 @@ export async function purgeExpired(
     sql`DELETE FROM notifications WHERE incident_id IS NULL AND created_at < ${incCutoff}`,
   );
   out.notifications = notes.rowCount ?? 0;
+  // Digests first (they reference AI calls), then the AI call log; same retention as incidents.
+  const dg = await db.execute(sql`DELETE FROM digests WHERE created_at < ${incCutoff}`);
+  out.digests = dg.rowCount ?? 0;
+  const calls = await db.execute(sql`DELETE FROM ai_calls WHERE at < ${incCutoff}`);
+  out.ai_calls = calls.rowCount ?? 0;
   const links = await db.execute(sql`DELETE FROM short_links WHERE expires_at < ${now}`);
   out.short_links = links.rowCount ?? 0;
   for (const [table, column, key] of TARGETS) {

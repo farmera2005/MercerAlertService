@@ -123,6 +123,17 @@ export function SettingField({
         />
       );
       break;
+    case 'textarea':
+      input = (
+        <Textarea
+          {...common}
+          rows={6}
+          placeholder={f.placeholder}
+          maxLength={4000}
+          {...valueProps}
+        />
+      );
+      break;
     case 'timezone':
       input = (
         <Select {...common} {...valueProps}>

@@ -11,6 +11,11 @@ import {
   WRITEBACK_ACK_QUEUE,
   NOTIFY_TEST_QUEUE,
   notifyTestSchema,
+  AI_TEST_QUEUE,
+  aiTestSchema,
+  DIGEST_QUEUES,
+  digestRunSchema,
+  type DigestRunResult,
   type AppConfig,
   type Logger,
   type SecretBox,
@@ -58,6 +63,16 @@ import {
   type NotifySummary,
 } from './notify';
 import { SourceMonitor } from './source-monitor';
+import {
+  AI_SUMMARY_QUEUE,
+  AI_SWEEP_SEC,
+  dueSummaries,
+  runAiTest,
+  runDigest,
+  runIncidentAi,
+  type AiDeps,
+  type IncidentAiResult,
+} from './ai';
 
 export type WorkerMode = 'awaiting_setup' | 'monitoring' | 'config_error';
 
@@ -78,6 +93,9 @@ export interface Worker {
   correlateOnce(opts?: { reconcile?: boolean }): Promise<CycleSummary | null>;
   notifyOnce(): Promise<NotifySummary>;
   selfCheckOnce(): Promise<string[]>;
+  /** Run the AI for every incident that needs it, inline (tests, simulator). */
+  aiOnce(): Promise<IncidentAiResult[]>;
+  digestOnce(kind: 'daily' | 'weekly', opts?: { manual?: boolean }): Promise<DigestRunResult>;
   health(): Promise<{ ok: boolean; details: Record<string, unknown> }>;
 }
 
@@ -134,6 +152,7 @@ export function createWorker(bootstrap: AppConfig, opts: WorkerOptions = {}): Wo
   const startedAt = now();
   let stopping = false;
   let lastBeatOk: Date | null = null;
+  const aiLog = createLogger('ai');
   let fingerprint = '';
   let reloadTimer: NodeJS.Timeout | null = null;
   let reloading: Promise<void> | null = null;
@@ -263,6 +282,48 @@ export function createWorker(bootstrap: AppConfig, opts: WorkerOptions = {}): Wo
     return runNotifyCycle(notifyDeps());
   }
 
+  const aiDeps = (): AiDeps => ({ cfg, db: dbh.db, box, log: aiLog, now });
+
+  async function aiOnce(): Promise<IncidentAiResult[]> {
+    const out: IncidentAiResult[] = [];
+    for (const id of await dueSummaries(aiDeps())) out.push(await runIncidentAi(aiDeps(), id));
+    return out;
+  }
+
+  /** One debounced job per incident that needs a summary (a storm queues one, not 40). */
+  const kickAi = () => {
+    if (stopping || !boss || !cfg.ai.enabled) return;
+    const b = boss;
+    dueSummaries(aiDeps())
+      .then(async (ids) => {
+        for (const incidentId of ids)
+          await b.send(
+            AI_SUMMARY_QUEUE,
+            { incidentId },
+            { singletonKey: `inc:${incidentId}`, startAfter: cfg.ai.summaryDebounceSec },
+          );
+      })
+      .catch((e: unknown) => log.error({ err: errorMessage(e) }, 'could not enqueue AI summaries'));
+  };
+
+  let digestSchedule = '';
+  /** (Re)apply digest crons when they or the time zone change; called after pg-boss starts. */
+  async function scheduleDigests(): Promise<void> {
+    if (!boss) return;
+    const key = JSON.stringify([cfg.digest, cfg.timezone]);
+    if (key === digestSchedule) return;
+    digestSchedule = key;
+    for (const [kind, cron] of [
+      ['daily', cfg.digest.dailyCron],
+      ['weekly', cfg.digest.weeklyCron],
+    ] as const) {
+      if (cfg.digest.enabled)
+        await boss.schedule(DIGEST_QUEUES[kind], cron, {}, { tz: cfg.timezone });
+      else await boss.unschedule(DIGEST_QUEUES[kind]).catch(() => {});
+    }
+    log.info({ digest: cfg.digest }, 'digest schedule applied');
+  }
+
   const kickNotify = () => {
     if (stopping || !boss) return;
     boss
@@ -308,6 +369,9 @@ export function createWorker(bootstrap: AppConfig, opts: WorkerOptions = {}): Wo
         log.info({ pollSec: next.swis.pollSec }, 'poll intervals updated');
       schedulePolls();
     }
+    await scheduleDigests().catch((e: unknown) =>
+      log.error({ err: errorMessage(e) }, 'could not schedule digests'),
+    );
   }
 
   async function doReload(): Promise<void> {
@@ -434,6 +498,8 @@ export function createWorker(bootstrap: AppConfig, opts: WorkerOptions = {}): Wo
     correlateOnce,
     notifyOnce,
     selfCheckOnce: () => runSelfCheck(notifyDeps()),
+    aiOnce,
+    digestOnce: (kind, o) => runDigest(aiDeps(), kind, o),
 
     async start() {
       await reloadConfig();
@@ -501,6 +567,7 @@ export function createWorker(bootstrap: AppConfig, opts: WorkerOptions = {}): Wo
         if (mode === 'monitoring') {
           await correlateOnce();
           kickNotify();
+          kickAi();
         }
       });
       await boss.createQueue(RETENTION_QUEUE, {
@@ -546,9 +613,43 @@ export function createWorker(bootstrap: AppConfig, opts: WorkerOptions = {}): Wo
         return runTestSend(notifyDeps(), input.target, input.by);
       });
 
+      // AI: enrichment only, in its own queues; nothing above waits for it.
+      await boss.createQueue(AI_SUMMARY_QUEUE, {
+        policy: 'stately',
+        retryLimit: 0,
+        expireInSeconds: 900,
+      });
+      await boss.work(AI_SUMMARY_QUEUE, { pollingIntervalSeconds: 2 }, async ([job]) => {
+        const id = Number((job?.data as { incidentId?: unknown } | undefined)?.incidentId);
+        if (Number.isInteger(id) && id > 0) return runIncidentAi(aiDeps(), id);
+      });
+      for (const kind of ['daily', 'weekly'] as const) {
+        await boss.createQueue(DIGEST_QUEUES[kind], {
+          policy: 'singleton',
+          retryLimit: 1,
+          retryDelay: 300,
+          expireInSeconds: 900,
+        });
+        await boss.work(DIGEST_QUEUES[kind], { pollingIntervalSeconds: 1 }, async ([job]) => {
+          await reloadConfig();
+          const input = digestRunSchema.parse(job?.data ?? {});
+          const r = await runDigest(aiDeps(), kind, { manual: input.manual });
+          kickNotify();
+          return r;
+        });
+      }
+      await scheduleDigests();
+      await boss.createQueue(AI_TEST_QUEUE, { retryLimit: 0, expireInSeconds: 180 });
+      await boss.work(AI_TEST_QUEUE, { pollingIntervalSeconds: 0.5 }, async ([job]) => {
+        await reloadConfig();
+        const input = aiTestSchema.parse(job?.data);
+        return runAiTest(aiDeps(), input.model);
+      });
+
       await listen();
       schedulePolls();
       baseTimers.push(setInterval(kickNotify, NOTIFY_TICK_SEC * 1000));
+      baseTimers.push(setInterval(kickAi, AI_SWEEP_SEC * 1000));
       baseTimers.push(setInterval(() => void beat(), cfg.worker.heartbeatSec * 1000));
       log.info(
         { mode, swis: isSwisConfigured(cfg.swis) ? cfg.swis.baseUrl : null },

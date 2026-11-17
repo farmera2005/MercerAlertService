@@ -79,6 +79,8 @@ export const SETTINGS_TABS = [
   { href: '/settings/notifications', label: 'Notifications' },
   { href: '/settings/routing', label: 'Routing' },
   { href: '/settings/oncall', label: 'On-call' },
+  { href: '/settings/ai', label: 'AI' },
+  { href: '/settings/digests', label: 'Digests' },
   { href: '/settings/sign-in', label: 'Sign-in' },
   { href: '/settings/wall', label: 'Map & wall' },
   { href: '/settings/general', label: 'General' },

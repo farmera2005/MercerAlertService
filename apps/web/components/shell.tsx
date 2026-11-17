@@ -1,6 +1,7 @@
 import Link from 'next/link';
 import type { ReactNode } from 'react';
-import { listHeartbeats, listNotifierHealth, listPollerStates } from '@mercer/db';
+import { budgetState, startOfZonedDay } from '@mercer/core';
+import { aiSpendSince, listHeartbeats, listNotifierHealth, listPollerStates } from '@mercer/db';
 import { logoutAction } from '@/app/actions/auth';
 import type { CurrentUser } from '@/lib/auth';
 import { liveInitial } from '@/lib/live-initial';
@@ -48,13 +49,40 @@ async function systemBanners(user: CurrentUser): Promise<Banner[]> {
         </>
       ),
     });
-  const [beats, pollers, notifiers] = await Promise.all([
+  const [beats, pollers, notifiers, aiSpent] = await Promise.all([
     listHeartbeats(server().db.db),
     listPollerStates(server().db.db),
     listNotifierHealth(server().db.db),
+    cfg.ai.enabled
+      ? aiSpendSince(server().db.db, startOfZonedDay(new Date(), cfg.timezone))
+      : Promise.resolve(0),
   ]);
+  const budget = budgetState(aiSpent, cfg.ai.dailyBudgetUsd);
+  if (cfg.ai.enabled && budget.level !== 'ok')
+    out.push({
+      tone: 'warning',
+      text: (
+        <>
+          {budget.level === 'exhausted'
+            ? `The daily AI budget is spent (US$${budget.spentUsd.toFixed(2)}): summaries and digests use templates until midnight. Notifications are not affected.`
+            : `AI spend today is US$${budget.spentUsd.toFixed(2)} of US$${budget.budgetUsd.toFixed(2)} (${Math.round(budget.fraction * 100)} %). At 100 % MAS uses templates until midnight.`}
+          {user.isAdmin && (
+            <>
+              {' '}
+              <Link className="underline" href="/settings/ai">
+                AI settings
+              </Link>
+            </>
+          )}
+        </>
+      ),
+    });
   for (const n of notifiers)
-    if (n.consecutiveFailures >= 3 && !['outbox', 'correlation-backlog'].includes(n.key))
+    if (
+      n.consecutiveFailures >= 3 &&
+      !['outbox', 'correlation-backlog'].includes(n.key) &&
+      !n.key.startsWith('ai-')
+    )
       out.push({
         tone: 'error',
         text: (

@@ -48,6 +48,8 @@ export interface DispatchContext {
   links: MessageLinks;
   /** Formats a time for message text in APP_TIMEZONE. */
   formatTime: (d: Date) => string;
+  /** Post one follow-up card when the first AI summary arrives (AI_POST_SUMMARY_UPDATE). */
+  postAiSummary: boolean;
 }
 
 export type MessagePayload = TeamsPayload | SmsPayload | PushoverPayload;
@@ -242,6 +244,7 @@ export function planDispatch(
       pagedPersonIds: prev?.pagedPersonIds ?? [],
       lastSnoozedUntil: snoozed ? inc.snoozedUntil : null,
       baselined: prev?.baselined ?? false,
+      aiSummaryPosted: prev?.aiSummaryPosted ?? false,
     },
     cancelEscalations: null,
     scheduleEscalations: [],
@@ -256,6 +259,7 @@ export function planDispatch(
   };
   const update = (change: string, extraPages?: Pages) => {
     plan.state.updateCount += 1;
+    if (inc.ai) plan.state.aiSummaryPosted = true;
     plan.messages.push(
       ...teamsMessages(
         inc,
@@ -277,6 +281,7 @@ export function planDispatch(
     }
     plan.state.baselined = false;
     plan.state.updateCount = 0;
+    plan.state.aiSummaryPosted = !!inc.ai;
     const pages = pageWorthy ? page('incident_open') : null;
     plan.messages.push(
       ...teamsMessages(inc, route, ctx, 'incident_open', { kind: 'open' }, pages?.names ?? []),
@@ -329,6 +334,13 @@ export function planDispatch(
   // and nobody has acknowledged it.
   const needsPage = pageWorthy && (!prev.pagedAt || snoozeEnded);
   if (snoozeEnded && needsPage) changes.push('Snooze ended, still not acknowledged');
+  // The first AI summary is worth one follow-up post (it explains the likely cause and first
+  // steps). It never pages, and goes only where routing already sends this incident.
+  if (inc.ai && !prev.aiSummaryPosted) {
+    if (!ctx.postAiSummary)
+      plan.state.aiSummaryPosted = true; // decided: no follow-up card
+    else if (changes.length === 0) changes.push('Summary and first steps');
+  }
   if (changes.length) update(changes.join(' · '), needsPage ? page('incident_update') : undefined);
   return finish(plan, inc, ctx);
 }
@@ -362,6 +374,7 @@ export function planEscalation(
   const route = routeFor(inc, ctx);
   out.state.pagedPersonIds = [...new Set([...prev.pagedPersonIds, ...pages.personIds])];
   out.state.updateCount = prev.updateCount + 1;
+  if (inc.ai) out.state.aiSummaryPosted = true;
   out.messages.push(
     ...teamsMessages(
       inc,

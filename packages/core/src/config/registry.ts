@@ -20,7 +20,8 @@ export type SettingKind =
   | 'timezone'
   | 'regex'
   | 'cron'
-  | 'select';
+  | 'select'
+  | 'textarea';
 
 export const SETTING_SECTIONS = {
   general: {
@@ -100,6 +101,21 @@ export const SETTING_SECTIONS = {
     title: 'Pushover',
     description:
       'Push notifications through a Pushover application (pushover.net → Create an Application).',
+  },
+  ai: {
+    title: 'AI summaries (Claude)',
+    description:
+      'Claude writes plain-English titles, summaries and digests and may nudge priority by one level within guardrails. Incidents and notifications never wait for it: without a key, over budget or when the API is down, MAS uses its templates.',
+  },
+  ai_models: {
+    title: 'AI models & limits',
+    description:
+      'Which Claude model each task uses, how long a call may take and how much MAS may spend per day.',
+  },
+  digest: {
+    title: 'Digests',
+    description:
+      'A morning digest of the night and a weekly trends report, posted to a Teams channel. They are written from a template when AI is off.',
   },
   health: {
     title: 'Self-monitoring',
@@ -749,6 +765,143 @@ export const SETTINGS: readonly SettingDef[] = [
     label: 'API base URL',
     kind: 'text',
     advanced: true,
+  }),
+
+  // ai
+  s({
+    key: 'ANTHROPIC_API_KEY',
+    section: 'ai',
+    label: 'Anthropic API key',
+    kind: 'secret',
+    help: 'From console.anthropic.com → API keys. Stored encrypted; AI stays off until it is set.',
+  }),
+  s({ key: 'AI_ENABLED', section: 'ai', label: 'Use AI when a key is set', kind: 'bool' }),
+  s({
+    key: 'AI_REDACT',
+    section: 'ai',
+    label: 'Redact IP addresses, MAC addresses and serial numbers before sending',
+    kind: 'bool',
+    help: 'They are replaced with placeholders such as [IP-1] and restored locally. Hostnames and site names are sent.',
+  }),
+  s({
+    key: 'AI_PRIORITY_MODE',
+    section: 'ai',
+    label: 'Priority suggestions',
+    kind: 'select',
+    options: [
+      { value: 'apply', label: 'Apply (±1 level, within guardrails)' },
+      { value: 'suggest', label: 'Show only; priority follows the score' },
+      { value: 'off', label: 'Do not ask' },
+    ],
+    help: 'AI can never lower a site outage, a firewall down or a harvest-critical site in harvest below P2.',
+  }),
+  s({
+    key: 'AI_POST_SUMMARY_UPDATE',
+    section: 'ai',
+    label: 'Post the first AI summary to Teams as a follow-up card',
+    kind: 'bool',
+  }),
+  s({
+    key: 'AI_ENVIRONMENT_NOTES',
+    section: 'ai',
+    label: 'Notes about our network',
+    kind: 'textarea',
+    placeholder:
+      'e.g. Elevators reach corporate over Spectrum business cable with LTE backup on the FortiGate. Scale PCs run CompuWeigh on Windows 10. The Rockford elevator has a generator.',
+    help: 'Added to every prompt so summaries and first steps fit our equipment. No passwords.',
+  }),
+  s({
+    key: 'AI_MODEL_STRONG',
+    section: 'ai_models',
+    label: 'Model for summaries and digests',
+    kind: 'text',
+    placeholder: 'claude-opus-5-5',
+  }),
+  s({
+    key: 'AI_MODEL_FAST',
+    section: 'ai_models',
+    label: 'Model for priority checks',
+    kind: 'text',
+    placeholder: 'claude-haiku-5-5',
+  }),
+  s({
+    key: 'AI_DAILY_BUDGET_USD',
+    section: 'ai_models',
+    label: 'Daily budget (US$)',
+    kind: 'number',
+    min: 0,
+    max: 10000,
+    help: 'Warning at 80 %. At 100 % MAS uses templates until midnight.',
+  }),
+  s({
+    key: 'AI_TIMEOUT_SEC',
+    section: 'ai_models',
+    label: 'Give up on a call after (seconds)',
+    kind: 'int',
+    min: 10,
+    max: 600,
+  }),
+  s({
+    key: 'AI_SUMMARY_DEBOUNCE_SEC',
+    section: 'ai_models',
+    label: 'Wait before summarizing a change (seconds)',
+    kind: 'int',
+    min: 0,
+    max: 600,
+    help: 'A storm of alerts in this window produces one summary.',
+  }),
+  s({
+    key: 'AI_MODEL_SEVERITY',
+    section: 'ai_models',
+    label: 'Override: priority check model',
+    kind: 'text',
+    advanced: true,
+  }),
+  s({
+    key: 'AI_MODEL_SUMMARY',
+    section: 'ai_models',
+    label: 'Override: incident summary model',
+    kind: 'text',
+    advanced: true,
+  }),
+  s({
+    key: 'AI_MODEL_DIGEST',
+    section: 'ai_models',
+    label: 'Override: digest model',
+    kind: 'text',
+    advanced: true,
+  }),
+  s({
+    key: 'ANTHROPIC_BASE_URL',
+    section: 'ai_models',
+    label: 'API base URL',
+    kind: 'url',
+    advanced: true,
+    help: 'Only for testing against a local mock.',
+  }),
+
+  // digest
+  s({ key: 'DIGEST_ENABLED', section: 'digest', label: 'Post digests', kind: 'bool' }),
+  s({
+    key: 'DIGEST_CHANNEL',
+    section: 'digest',
+    label: 'Teams channel (key)',
+    kind: 'text',
+    placeholder: 'net-digest',
+  }),
+  s({
+    key: 'DIGEST_DAILY_CRON',
+    section: 'digest',
+    label: 'Daily digest schedule (cron, local time)',
+    kind: 'cron',
+    placeholder: '0 7 * * *',
+  }),
+  s({
+    key: 'DIGEST_WEEKLY_CRON',
+    section: 'digest',
+    label: 'Weekly trends schedule (cron, local time)',
+    kind: 'cron',
+    placeholder: '30 7 * * 1',
   }),
 
   // health

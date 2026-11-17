@@ -142,6 +142,37 @@ export const envSchema = z.object({
   PUSHOVER_APP_TOKEN: str(''),
   PUSHOVER_API_BASE: str('https://api.pushover.net'),
 
+  // --- AI (Claude): enrichment only, never on the critical path ---
+  ANTHROPIC_API_KEY: str(''),
+  /** Only a local mock changes this. */
+  ANTHROPIC_BASE_URL: str('https://api.anthropic.com'),
+  /** Master switch; AI also stays off while no API key is set. */
+  AI_ENABLED: bool(true),
+  AI_MODEL_FAST: str('claude-haiku-5-5'),
+  AI_MODEL_STRONG: str('claude-opus-5-5'),
+  /** Per-task overrides; empty = AI_MODEL_FAST (severity) or AI_MODEL_STRONG (the others). */
+  AI_MODEL_SEVERITY: str(''),
+  AI_MODEL_SUMMARY: str(''),
+  AI_MODEL_DIGEST: str(''),
+  /** Replace IPs, MACs and serial numbers with placeholders before anything is sent (E1). */
+  AI_REDACT: bool(true),
+  AI_DAILY_BUDGET_USD: num(5, 0, 10_000),
+  AI_TIMEOUT_SEC: int(90, 10),
+  /** Wait this long after a change before summarizing, so a storm yields one summary. */
+  AI_SUMMARY_DEBOUNCE_SEC: int(45, 0),
+  /** apply: the guarded ±1 step changes priority · suggest: shown only · off: not asked. */
+  AI_PRIORITY_MODE: z.enum(['apply', 'suggest', 'off']).default('apply'),
+  /** Post one follow-up Teams card when the first AI summary of an incident is ready. */
+  AI_POST_SUMMARY_UPDATE: bool(true),
+  /** Free text about the network added to every prompt (equipment, circuits, contacts). */
+  AI_ENVIRONMENT_NOTES: str(''),
+
+  // --- Digests ---
+  DIGEST_ENABLED: bool(true),
+  DIGEST_DAILY_CRON: str('0 7 * * *'),
+  DIGEST_WEEKLY_CRON: str('30 7 * * 1'),
+  DIGEST_CHANNEL: str('net-digest'),
+
   // --- Bootstrap / security ---
   /** 32-byte base64 key that encrypts secrets stored in the database. Usually MAS_MASTER_KEY_FILE. */
   MAS_MASTER_KEY: z.string().optional(),
@@ -234,6 +265,21 @@ export interface AppConfig {
     pushover: { appToken: string; apiBase: string } | null;
   };
   wall: { rotateSec: number; showMap: boolean; pinP1: boolean };
+  ai: {
+    /** AI_ENABLED and an API key is set. */
+    enabled: boolean;
+    apiKey: string;
+    baseUrl: string;
+    models: { severity: string; summary: string; digest: string };
+    redact: boolean;
+    dailyBudgetUsd: number;
+    timeoutMs: number;
+    summaryDebounceSec: number;
+    priorityMode: 'apply' | 'suggest' | 'off';
+    postSummaryUpdate: boolean;
+    environmentNotes: string;
+  };
+  digest: { enabled: boolean; dailyCron: string; weeklyCron: string; channelKey: string };
   correlation: {
     windowSec: number;
     holddownSec: number;
@@ -411,8 +457,24 @@ export function loadConfig(
     if (!/^(\+[1-9]\d{7,14}|MG[0-9a-f]{32})$/i.test(e.TWILIO_FROM))
       fail('TWILIO_FROM', 'an E.164 number (+14195550100) or a Messaging Service SID (MG…)');
   }
-  for (const key of ['TWILIO_API_BASE', 'PUSHOVER_API_BASE'] as const)
+  for (const key of ['TWILIO_API_BASE', 'PUSHOVER_API_BASE', 'ANTHROPIC_BASE_URL'] as const)
     if (!/^https?:\/\//.test(e[key])) fail(key, 'an http(s) URL');
+  for (const key of [
+    'AI_MODEL_FAST',
+    'AI_MODEL_STRONG',
+    'AI_MODEL_SEVERITY',
+    'AI_MODEL_SUMMARY',
+    'AI_MODEL_DIGEST',
+  ] as const)
+    if (e[key] && !/^claude-[a-z0-9][a-z0-9.-]*$/.test(e[key]))
+      fail(key, 'a Claude model ID such as claude-opus-5-5');
+  if (e.ANTHROPIC_API_KEY && /\s/.test(e.ANTHROPIC_API_KEY))
+    fail('ANTHROPIC_API_KEY', 'the key must not contain spaces or line breaks');
+  for (const key of ['DIGEST_DAILY_CRON', 'DIGEST_WEEKLY_CRON', 'RETENTION_CRON'] as const)
+    if (e[key].trim().split(/\s+/).length !== 5)
+      fail(key, 'a 5-field cron expression, e.g. 0 7 * * *');
+  if (!/^[a-z0-9][a-z0-9-]{1,39}$/.test(e.DIGEST_CHANNEL))
+    fail('DIGEST_CHANNEL', 'a Teams channel key such as net-digest');
   const baseUrl = (e.SWIS_BASE_URL ?? `https://${e.SWIS_HOST}:${e.SWIS_PORT}`).replace(/\/+$/, '');
 
   return {
@@ -517,6 +579,29 @@ export function loadConfig(
         : null,
     },
     wall: { rotateSec: e.WALL_ROTATE_SEC, showMap: e.WALL_SHOW_MAP, pinP1: e.WALL_PIN_P1 },
+    ai: {
+      enabled: e.AI_ENABLED && !!e.ANTHROPIC_API_KEY,
+      apiKey: e.ANTHROPIC_API_KEY,
+      baseUrl: e.ANTHROPIC_BASE_URL.replace(/\/+$/, ''),
+      models: {
+        severity: e.AI_MODEL_SEVERITY || e.AI_MODEL_FAST,
+        summary: e.AI_MODEL_SUMMARY || e.AI_MODEL_STRONG,
+        digest: e.AI_MODEL_DIGEST || e.AI_MODEL_STRONG,
+      },
+      redact: e.AI_REDACT,
+      dailyBudgetUsd: e.AI_DAILY_BUDGET_USD,
+      timeoutMs: e.AI_TIMEOUT_SEC * 1000,
+      summaryDebounceSec: e.AI_SUMMARY_DEBOUNCE_SEC,
+      priorityMode: e.AI_PRIORITY_MODE,
+      postSummaryUpdate: e.AI_POST_SUMMARY_UPDATE,
+      environmentNotes: e.AI_ENVIRONMENT_NOTES,
+    },
+    digest: {
+      enabled: e.DIGEST_ENABLED,
+      dailyCron: e.DIGEST_DAILY_CRON.trim(),
+      weeklyCron: e.DIGEST_WEEKLY_CRON.trim(),
+      channelKey: e.DIGEST_CHANNEL,
+    },
     correlation: {
       windowSec: e.CORRELATION_WINDOW_SEC,
       holddownSec: e.RESOLVE_HOLDDOWN_SEC,

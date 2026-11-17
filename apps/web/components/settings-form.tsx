@@ -42,7 +42,7 @@ export function SettingsForm({
               {basic.map((f) => (
                 <div
                   key={f.key}
-                  className={f.kind === 'pem' || f.kind === 'bool' ? 'sm:col-span-2' : ''}
+                  className={['pem', 'bool', 'textarea'].includes(f.kind) ? 'sm:col-span-2' : ''}
                 >
                   <SettingField field={f} error={state.errors?.[f.key]} submitted={state.values} />
                 </div>
@@ -57,7 +57,9 @@ export function SettingsForm({
                   {advanced.map((f) => (
                     <div
                       key={f.key}
-                      className={f.kind === 'pem' || f.kind === 'bool' ? 'sm:col-span-2' : ''}
+                      className={
+                        ['pem', 'bool', 'textarea'].includes(f.kind) ? 'sm:col-span-2' : ''
+                      }
                     >
                       <SettingField
                         field={f}

@@ -18,6 +18,7 @@ export default defineConfig({
   projects: [
     { name: 'setup', testMatch: /setup\.spec\.ts/ },
     { name: 'dashboard', testMatch: /dashboard\.spec\.ts/, dependencies: ['setup'] },
+    { name: 'ai', testMatch: /ai\.spec\.ts/, dependencies: ['dashboard'] },
   ],
   use: {
     baseURL: process.env.E2E_BASE_URL ?? 'http://localhost:3000',

@@ -27,10 +27,27 @@ const inc: NotifyIncident = {
   inMaintenance: false,
   seeded: false,
   recoveryTargetMin: 240,
+  ai: null,
 };
 const links = { view: 'v', ack: 'a', snooze: 's', short: 'https://mas.example/i/K7Q2M9' };
 
 describe('teamsCard', () => {
+  it('adds the AI summary (except on the resolved card)', () => {
+    const ai = {
+      whatIsAffected: 'Scale house and office at Rockford Elevator are offline.',
+      likelyCause: 'The ISP circuit: the firewall went down first.',
+      confidence: 'medium' as const,
+      firstSteps: ['Check the circuit with the ISP', 'Call the site about power'],
+    };
+    const open = JSON.stringify(teamsCard({ ...inc, ai }, { kind: 'open', links, now }));
+    expect(open).toContain('Likely cause** (medium confidence)');
+    expect(open).toContain('1. Check the circuit with the ISP');
+    const done = JSON.stringify(
+      teamsCard({ ...inc, ai, status: 'resolved' }, { kind: 'resolved', links, now }),
+    );
+    expect(done).not.toContain('Likely cause');
+  });
+
   it('is a Workflows message with an Adaptive Card, facts and dashboard buttons', () => {
     const card = teamsCard(inc, { kind: 'open', links, now });
     expect(card.type).toBe('message');

@@ -25,3 +25,31 @@ export interface NotifyTestResult {
   ok: boolean;
   message: string;
 }
+
+export const AI_TEST_QUEUE = 'ai.test';
+/** Settings → AI "Test": one tiny call with the saved key and the given model. */
+export const aiTestSchema = z.object({
+  model: z
+    .string()
+    .regex(/^claude-[a-z0-9][a-z0-9.-]*$/)
+    .optional(),
+  by: z.string().min(1).max(200),
+});
+export type AiTestJob = z.infer<typeof aiTestSchema>;
+export interface AiTestResult {
+  ok: boolean;
+  message: string;
+}
+
+export const DIGEST_QUEUES = { daily: 'ai.digest.daily', weekly: 'ai.digest.weekly' } as const;
+/** Scheduled by cron; `manual` = Settings → Digests "Send now" (covers the period up to now). */
+export const digestRunSchema = z.object({
+  manual: z.boolean().optional(),
+  by: z.string().max(200).optional(),
+});
+export type DigestRunJob = z.infer<typeof digestRunSchema>;
+export interface DigestRunResult {
+  ok: boolean;
+  message: string;
+  digestId?: number;
+}

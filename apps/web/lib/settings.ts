@@ -162,6 +162,9 @@ export function changesFromForm(form: FormData, keys: string[]): Record<string, 
       case 'pem':
         out[key] = value.trim() ? value.replace(/\r\n/g, '\n').trim() + '\n' : null;
         break;
+      case 'textarea':
+        out[key] = value.trim() ? value.replace(/\r\n/g, '\n').trim() : null;
+        break;
       default:
         out[key] = value.trim() === '' ? null : value.trim();
     }
@@ -202,6 +205,8 @@ function validateKind(def: SettingDef, value: string): string | null {
     }
     case 'select':
       return def.options?.some((o) => o.value === value) ? null : 'Choose one of the options.';
+    case 'textarea':
+      return value.length > 4000 ? 'Keep this under 4,000 characters.' : null;
     case 'cron':
       return value.trim().split(/\s+/).length === 5
         ? null

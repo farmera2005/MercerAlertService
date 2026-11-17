@@ -1,6 +1,12 @@
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
-import { buildTimeline, displayTitle, formatDuration } from '@mercer/core';
+import {
+  buildTimeline,
+  displayTitle,
+  formatDuration,
+  priorityBasis,
+  readStoredAiSummary,
+} from '@mercer/core';
 import { getIncidentDetail, notificationsForIncident } from '@mercer/db';
 import { IncidentActions } from '@/components/incident-actions';
 import { NotificationLog } from '@/components/notification-log';
@@ -29,14 +35,6 @@ const MEMBER_ROLE: Record<string, string> = {
   member: 'Related',
 };
 
-interface AiSummary {
-  whatIsAffected?: string;
-  likelyCause?: string;
-  confidence?: string;
-  firstSteps?: string[];
-  changes?: string;
-}
-
 export default async function IncidentPage({
   params,
   searchParams,
@@ -63,7 +61,22 @@ export default async function IncidentPage({
   const durationMs = end.getTime() - inc.openedAt.getTime();
   const targetLeftMs = inc.recoveryTargetMin * 60_000 - durationMs;
   const activeAlerts = d.members.filter((m) => m.record.state === 'active').length;
-  const ai = (inc.aiSummary ?? null) as AiSummary | null;
+  const ai = readStoredAiSummary(inc.aiSummary);
+  const aiStale = !!ai && open && ai.forMaterialRev < inc.materialRev;
+  const aiNote = !cfg.ai.enabled
+    ? 'Generated from the correlated alerts. AI summaries are off.'
+    : inc.seeded
+      ? 'Generated from the correlated alerts. Incidents that existed before MAS started are not summarized.'
+      : inc.aiStatus === 'budget_blocked'
+        ? 'Generated from the correlated alerts. The daily AI budget is spent; Claude summarizes after midnight.'
+        : inc.aiStatus === 'error'
+          ? 'Generated from the correlated alerts. Claude could not be reached; MAS will try again.'
+          : inc.aiStatus === 'refused' || inc.aiStatus === 'fallback'
+            ? 'Generated from the correlated alerts. Claude’s answer could not be used.'
+            : 'Generated from the correlated alerts. Claude is writing a summary.';
+  const aiApplied =
+    inc.aiPriorityAdjust !== null &&
+    inc.aiPriorityBasis === priorityBasis(inc.kind, inc.basePriority);
   const timeline = buildTimeline(d.timelineInput).map((e) => ({
     ...e,
     at: e.at.toISOString(),
@@ -111,26 +124,68 @@ export default async function IncidentPage({
             title="Summary"
             description={
               ai
-                ? 'AI summary'
-                : 'Generated from the correlated alerts (AI summaries arrive in a later release).'
+                ? `Written by Claude at ${fmtTime(ai.generatedAt, tz)}${aiStale ? ' · describes an earlier state; an update is on its way' : ''}`
+                : aiNote
             }
           >
-            <p className="text-sm leading-relaxed text-slate-200" data-testid="incident-summary">
-              {inc.templateSummary}
-            </p>
-            {ai?.likelyCause && (
-              <p className="mt-3 text-sm text-slate-300">
-                <b>Likely cause:</b> {ai.likelyCause}
-                {ai.confidence ? ` (${ai.confidence} confidence)` : ''}
+            {ai ? (
+              <div className="space-y-4 text-sm" data-testid="ai-summary">
+                <p className="leading-relaxed text-slate-100" data-testid="incident-summary">
+                  {ai.short}
+                </p>
+                <dl className="space-y-3">
+                  <div>
+                    <dt className="text-xs font-semibold uppercase tracking-wide text-slate-400">
+                      What is affected
+                    </dt>
+                    <dd className="mt-1 text-slate-200">{ai.whatIsAffected}</dd>
+                  </div>
+                  <div>
+                    <dt className="text-xs font-semibold uppercase tracking-wide text-slate-400">
+                      Likely cause · {ai.confidence} confidence
+                    </dt>
+                    <dd className="mt-1 text-slate-200">{ai.likelyCause}</dd>
+                  </div>
+                  <div>
+                    <dt className="text-xs font-semibold uppercase tracking-wide text-slate-400">
+                      First steps
+                    </dt>
+                    <dd>
+                      <ol className="mt-1 list-decimal space-y-1 pl-5 text-slate-200">
+                        {ai.firstSteps.map((step, i) => (
+                          <li key={i}>{step}</li>
+                        ))}
+                      </ol>
+                    </dd>
+                  </div>
+                  {ai.changes !== 'First summary.' && (
+                    <div>
+                      <dt className="text-xs font-semibold uppercase tracking-wide text-slate-400">
+                        What changed
+                      </dt>
+                      <dd className="mt-1 text-slate-200">{ai.changes}</dd>
+                    </div>
+                  )}
+                </dl>
+                <details className="rounded-lg border border-white/10 p-3">
+                  <summary className="cursor-pointer text-xs text-slate-400">
+                    MAS’s own summary (from the alerts)
+                  </summary>
+                  <p className="mt-2 leading-relaxed text-slate-300">{inc.templateSummary}</p>
+                </details>
+                <p className="text-xs text-slate-500">
+                  {ai.model}
+                  {ai.redacted
+                    ? ' · addresses and serial numbers were redacted before sending'
+                    : ''}
+                  . AI text can be wrong; the alerts and timeline are the record.
+                </p>
+              </div>
+            ) : (
+              <p className="text-sm leading-relaxed text-slate-200" data-testid="incident-summary">
+                {inc.templateSummary}
               </p>
             )}
-            {ai?.firstSteps?.length ? (
-              <ol className="mt-3 list-decimal space-y-1 pl-5 text-sm text-slate-300">
-                {ai.firstSteps.map((s, i) => (
-                  <li key={i}>{s}</li>
-                ))}
-              </ol>
-            ) : null}
           </Card>
 
           <Card
@@ -273,14 +328,33 @@ export default async function IncidentPage({
                 <li key={i}>{x}</li>
               ))}
             </ul>
-            {inc.aiPriorityReason && (
-              <p className="mt-3 text-sm text-slate-300">
-                AI suggestion ({inc.aiPriorityAdjust && inc.aiPriorityAdjust > 0 ? '+' : ''}
-                {inc.aiPriorityAdjust}): {inc.aiPriorityReason}
-              </p>
+            {inc.aiPrioritySuggested !== null && inc.aiPriorityReason && (
+              <div className="mt-4 border-t border-white/10 pt-3 text-sm" data-testid="ai-priority">
+                <div className="font-medium text-slate-200">
+                  AI second opinion:{' '}
+                  {inc.aiPrioritySuggested === 0
+                    ? 'keep'
+                    : inc.aiPrioritySuggested > 0
+                      ? 'one level more urgent'
+                      : 'one level less urgent'}
+                </div>
+                <p className="mt-1 text-slate-300">{inc.aiPriorityReason}</p>
+                {aiApplied && inc.priority !== inc.basePriority && (
+                  <p className="mt-1 text-xs text-slate-400">
+                    Applied: the score gives {inc.basePriority}, the incident is {inc.priority}.
+                  </p>
+                )}
+                {inc.aiPrioritySuggested !== 0 && !aiApplied && !inc.guardrailNote && (
+                  <p className="mt-1 text-xs text-slate-400">
+                    {cfg.ai.priorityMode === 'apply'
+                      ? 'Not applied: the incident changed since.'
+                      : 'Not applied: suggestions are shown only (Settings → AI).'}
+                  </p>
+                )}
+              </div>
             )}
             {inc.guardrailNote && (
-              <p className="mt-2 text-xs text-amber-200">{inc.guardrailNote}</p>
+              <p className="mt-2 text-xs text-amber-200">Guardrail: {inc.guardrailNote}</p>
             )}
           </Card>
 

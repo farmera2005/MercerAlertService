@@ -15,7 +15,14 @@ const IPV4 = /\b(?:\d{1,3}\.){3}\d{1,3}(?:\/\d{1,2})?\b/g;
 // Full form, or compressed with "::" (at least one hex digit); never a clock time like 10:30.
 const IPV6 =
   /(?<![\w:])(?=[0-9a-f:]*[0-9a-f])(?:(?:[0-9a-f]{1,4}:){7}[0-9a-f]{1,4}|(?:[0-9a-f]{1,4}:){0,6}[0-9a-f]{0,4}::(?:[0-9a-f]{1,4}:){0,6}[0-9a-f]{0,4})(?![\w:])/gi;
-const MAC = /\b(?:[0-9a-f]{2}[:-]){5}[0-9a-f]{2}\b/gi;
+const MAC = /\b(?:[0-9a-f]{2}[:-]){5}[0-9a-f]{2}\b|\b[0-9a-f]{4}\.[0-9a-f]{4}\.[0-9a-f]{4}\b/gi;
+
+/** Fresh copies of the address patterns (global regexes carry state, so never share one). */
+export const addressPatterns = () => ({
+  ipv4: new RegExp(IPV4.source, IPV4.flags),
+  ipv6: new RegExp(IPV6.source, IPV6.flags),
+  mac: new RegExp(MAC.source, MAC.flags),
+});
 
 /** The wall is visible to anyone in the room, so addresses never reach it. */
 export function stripAddresses(text: string): string {

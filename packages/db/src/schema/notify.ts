@@ -187,6 +187,7 @@ export const incidentNotifyState = pgTable('incident_notify_state', {
     .default(sql`'{}'::int[]`),
   lastSnoozedUntil: ts('last_snoozed_until'),
   baselined: boolean('baselined').notNull().default(false),
+  aiSummaryPosted: boolean('ai_summary_posted').notNull().default(false),
   updatedAt: ts('updated_at').notNull().defaultNow(),
 });
 

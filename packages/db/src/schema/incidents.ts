@@ -61,9 +61,21 @@ export const incidents = pgTable(
     basePriority: priority('base_priority').notNull(),
     baseScore: real('base_score').notNull().default(0),
     priorityFactors: jsonb('priority_factors').$type<PriorityFactors>().notNull(),
+    /** The applied (guarded) AI step; null when none applies. */
     aiPriorityAdjust: smallint('ai_priority_adjust'),
+    /** What the model suggested (−1/0/1), applied or not. */
+    aiPrioritySuggested: smallint('ai_priority_suggested'),
+    /** `kind/basePriority` the suggestion was made for; the step holds only while this matches. */
+    aiPriorityBasis: text('ai_priority_basis'),
     aiPriorityReason: text('ai_priority_reason'),
     guardrailNote: text('guardrail_note'),
+    /** material_rev the AI last handled (summary written or permanently given up). */
+    aiSummaryMaterialRev: integer('ai_summary_material_rev'),
+    /** Transient failures for the current material_rev, and when to try again. */
+    aiAttempts: smallint('ai_attempts').notNull().default(0),
+    aiNextAttemptAt: ts('ai_next_attempt_at'),
+    /** ok · fallback · error · refused · budget_blocked · disabled (shown next to the summary). */
+    aiStatus: text('ai_status'),
     primarySiteId: integer('primary_site_id').references(() => sites.id, { onDelete: 'set null' }),
     divisionCode: text('division_code'),
     affectedSiteIds: integer('affected_site_ids')

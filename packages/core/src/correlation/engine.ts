@@ -13,6 +13,7 @@
 import { orionSeverity, SEVERITY_RANK } from '../orion';
 import { maintenanceFor } from './calendar';
 import { countStateChanges, rootOf, ROLE_RANK, type RootContext } from './graph';
+import { effectivePriority } from '../ai/priority';
 import { CORE_ROLES, scoreIncident } from './scoring';
 import { incidentSummary, incidentTitle } from './templates';
 import type {
@@ -557,6 +558,7 @@ class Engine {
       inMaintenance: false,
       seeded: true,
       aiPriorityAdjust: null,
+      aiPriorityBasis: null,
       members: new Map(),
     };
     this.incidents.set(ref, inc);
@@ -792,8 +794,12 @@ class Engine {
     inc.affectedSiteIds = [...affected].sort((a, b) => a - b);
     inc.baseScore = scored.score;
     inc.basePriority = scored.priority;
-    // An AI adjustment (M5) is re-applied by its own job; until then priority follows the score.
-    inc.priority = scored.priority;
+    // A stored AI adjustment holds only while kind and base priority are what it was made for;
+    // otherwise priority follows the score until the AI job looks again.
+    inc.priority = effectivePriority(scored.priority, kind, inc, {
+      firewallDown: downNodes.some((n) => n.role === 'firewall'),
+      harvestCriticalInHarvest: scored.harvestCriticalInHarvest,
+    });
     inc.priorityFactors = scored.factors;
     inc.recoveryTargetMin = scored.recoveryTargetMin;
     inc.title = incidentTitle(tpl);

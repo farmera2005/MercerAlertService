@@ -35,6 +35,10 @@ docker compose up -d         # full stack, no .env needed; add --profile dev for
    (titles and summaries) or _suggest_ (±1 priority level, clamped by guardrails in code).
 3. **AI is never on the critical path.** Every AI call has a timeout, runs in its own
    job, and has a templated fallback. Nothing waits on Claude before a notification goes out.
+   Only `packages/ai` (`AiRunner`) calls the Anthropic SDK. It handles the budget gate,
+   redaction, prompt caching, the one retry and the `ai_calls` log. Prompts, schemas and
+   guardrails live in `packages/core/src/ai`. Tests use the fake Messages API in mock-swis,
+   never the real one.
 4. **SWQL lives only in `packages/swis/src/queries.ts`.** Every column gets an explicit
    alias, and every value is a bound `@param`. The only exceptions are validated
    integers in `WITH ROWS` and regex-validated identifiers. Update

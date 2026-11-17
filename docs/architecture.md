@@ -157,9 +157,10 @@ several worker replicas cannot double-poll. Wall-clock jobs use pg-boss cron wit
 | `swis.writeback.ack`   | when someone acknowledges in MAS and `SWIS_WRITEBACK_ENABLED` is on (2 retries)                                         | standard  | M3 ✓      |
 | `notify.run`           | after each correlation cycle, when the dashboard changes an incident, and every 15 s: dispatch, due escalations, outbox | stately   | M4 ✓      |
 | `notify.test`          | Settings → Send test (the web request waits for the result)                                                             | standard  | M4 ✓      |
-| `ai.incident.summary`  | debounced per incident (`singletonKey`, 45 s)                                                                           | standard  | M5        |
-| `ai.digest.daily`      | cron `0 7 * * *` ET (configurable)                                                                                      | singleton | M5        |
-| `ai.digest.weekly`     | cron `30 7 * * 1` ET                                                                                                    | singleton | M5        |
+| `ai.incident.summary`  | after each correlation cycle and every 30 s, per incident that needs it (`singletonKey`, `startAfter` 45 s)             | stately   | M5 ✓      |
+| `ai.digest.daily`      | cron `DIGEST_DAILY_CRON` (`0 7 * * *` ET), or Settings → Digests → Send now                                             | singleton | M5 ✓      |
+| `ai.digest.weekly`     | cron `DIGEST_WEEKLY_CRON` (`30 7 * * 1` ET), or Send now                                                                | singleton | M5 ✓      |
+| `ai.test`              | Settings → AI → Test (the web request waits for the result)                                                             | standard  | M5 ✓      |
 | `maint.selfcheck`      | every 60 s: failing notifiers, overdue outbox, correlation backlog                                                      | singleton | M4 ✓      |
 
 ## 5. SWIS integration
@@ -291,14 +292,14 @@ Settings → Correlation shows live examples computed from the saved settings. T
 (`pnpm simulate`) asserts these outcomes end to end, through the real pollers, correlation,
 notification dispatcher and HTTP delivery to the mock's Teams and Twilio sinks:
 
-| Scenario                                                    | Incident                                                                     | Routing (default rules, nobody acknowledges)      |
-| ----------------------------------------------------------- | ---------------------------------------------------------------------------- | ------------------------------------------------- |
-| Rockford FortiGate down with 30 child alerts, October 10:00 | **1** site outage, **P1**, 31 alerts, resolved after recovery, 31:1          | #net-critical; on-call paged; escalated at 15 min |
-| Same outage in March at 22:00                               | **1** site outage, **P2**                                                    | #net-critical; paged (P2 after hours); escalated  |
-| Flapping AP (6 bounces in 6 min)                            | **1** flapping incident, **P3**                                              | #net-alerts; no page                              |
-| UPS on battery at Coldwater in harvest                      | **1** power incident, **P2**                                                 | #net-critical; no page (business hours)           |
-| HQ WAN link ramps to 98 %                                   | **1** interface incident, **P3**                                             | #net-alerts; no page                              |
-| SWIS returns 503 for 5 min                                  | **1** "SolarWinds monitoring unavailable", **P1**, resolved after it returns | #net-critical; paged                              |
+| Scenario                                                    | Incident                                                                     | Routing (default rules, nobody acknowledges)      | AI (fake model)               |
+| ----------------------------------------------------------- | ---------------------------------------------------------------------------- | ------------------------------------------------- | ----------------------------- |
+| Rockford FortiGate down with 30 child alerts, October 10:00 | **1** site outage, **P1**, 31 alerts, resolved after recovery, 31:1          | #net-critical; on-call paged; escalated at 15 min | ≤ 2 summaries (open, resolve) |
+| Same outage in March at 22:00                               | **1** site outage, **P2**                                                    | #net-critical; paged (P2 after hours); escalated  | 1 summary                     |
+| Flapping AP (6 bounces in 6 min)                            | **1** flapping incident, **P3**                                              | #net-alerts; no page                              | ≤ 2 (down, then flapping)     |
+| UPS on battery at Coldwater in harvest                      | **1** power incident, **P2**                                                 | #net-critical; no page (business hours)           | ≤ 2 summaries (open, resolve) |
+| HQ WAN link ramps to 98 %                                   | **1** interface incident, **P3**                                             | #net-alerts; no page                              | 1 summary                     |
+| SWIS returns 503 for 5 min                                  | **1** "SolarWinds monitoring unavailable", **P1**, resolved after it returns | #net-critical; paged                              | ≤ 2 summaries (open, resolve) |
 
 The **recovery target** is shown on each incident: 4 h for harvest-critical sites during
 harvest, 8 h otherwise.
@@ -308,38 +309,112 @@ level, with a reason that is stored and displayed. AI can never lower a whole-si
 firewall-down incident, or any harvest-critical site during harvest below **P2**. If such an
 incident is already below P2, AI can't lower it at all. Monitoring-source-down is fixed.
 
-## 8. AI layer (M5 design summary)
+## 8. AI layer (implemented in M5)
 
-| Task                                 | Default model                         | Effort | Notes                                                       |
-| ------------------------------------ | ------------------------------------- | ------ | ----------------------------------------------------------- |
-| Severity suggestion / classification | `claude-haiku-5-5` (`AI_MODEL_FAST`)  | low    | Output shape: `{adjust: -1\|0\|1, reason}`, then guardrails |
-| Incident summary                     | `claude-opus-5-5` (`AI_MODEL_STRONG`) | medium | On open and on material change, debounced                   |
-| Daily / weekly digests               | `claude-opus-5-5`                     | medium | 07:00 ET daily, Monday weekly                               |
-| Ask the network (chat)               | `claude-opus-5-5`                     | medium | Read-only tools that query the DB, never SQL, never SWIS    |
+Claude only ever **enriches**. An incident, its priority and its templated Teams/SMS messages
+exist before any AI runs. Every AI failure leaves the template in place, and the AI never decides
+whether an alert exists or who is notified.
 
-Each task's model can be overridden with `AI_MODEL_<TASK>`.
+| Task                    | Queue / trigger                                                  | Default model                         | Effort | Output                                                                         |
+| ----------------------- | ---------------------------------------------------------------- | ------------------------------------- | ------ | ------------------------------------------------------------------------------ |
+| Priority second opinion | `ai.incident.summary` (with the summary)                         | `claude-haiku-5-5` (`AI_MODEL_FAST`)  | low    | `{adjust: -1\|0\|1, reason}`, then guardrails in code                          |
+| Incident summary        | `ai.incident.summary`: on open and on material change, debounced | `claude-opus-5-5` (`AI_MODEL_STRONG`) | medium | title, short, whatIsAffected, likelyCause + confidence, firstSteps[], changes  |
+| Daily digest            | `ai.digest.daily`, cron `DIGEST_DAILY_CRON` (`0 7 * * *` ET)     | `AI_MODEL_STRONG`                     | medium | headline + sections of bullets, narrated from deterministic facts              |
+| Weekly trends           | `ai.digest.weekly`, cron `DIGEST_WEEKLY_CRON` (`30 7 * * 1` ET)  | `AI_MODEL_STRONG`                     | medium | same shape: repeat offenders, worsening sites, capacity, Orion rules to review |
+| Connection test         | `ai.test` (Settings → AI, the web request waits)                 | the summary model                     | low    | `{reply}`                                                                      |
+| Ask the network (chat)  | M6                                                               | `AI_MODEL_STRONG`                     | medium | read-only typed tools, never SQL, never SWIS                                   |
 
-- **Structured output.** We use `client.messages.parse()` with `zodOutputFormat(schema)`,
-  which gives JSON-schema-constrained output, and we re-validate with Zod. The current
-  Opus and Sonnet models reject _forced_ `tool_choice`, so JSON-schema structured outputs
-  is the supported way to get the "tool use with a JSON schema" guarantee. The chat uses
-  real tools with `strict: true`. If the response is invalid, we retry once and then fall
-  back to the templated summary.
-- **Refusals and errors.** We check `stop_reason` before reading content. Opus calls
-  enable server-side fallbacks (`fallbacks: "default"`). Any refusal, timeout or API
-  error falls back to the template and is logged.
-- **Prompt caching.** The environment description and site profiles (serialized as
-  sorted JSON) form a stable system prefix with `cache_control`. Volatile incident data
-  comes after the breakpoint.
-- **Budget.** `ai_calls` logs purpose, model, tokens (including cache read/write),
-  latency and estimated cost. `AI_DAILY_BUDGET_USD` shows a warning banner at 80%. At
-  100%, summaries, digests and chat drop to templates or are disabled until midnight ET.
-- **Debounce.** At most one summary job is queued per incident. A storm of 40 alerts
-  produces one summary, and later updates fire only on _material_ change: priority, root
-  cause, affected sites, or resolved.
-- **Redaction.** When `AI_REDACT=true` (default), IPv4/IPv6, MAC and serial-like tokens
-  are replaced with stable placeholders (`[IP-3]`) before the call and restored locally
-  for display. Hostnames and site names are sent.
+`AI_MODEL_SEVERITY`, `AI_MODEL_SUMMARY` and `AI_MODEL_DIGEST` override a single task.
+
+**Code layout.** Prompts, Zod output schemas, redaction, pricing, the guardrail decision and the
+digest templates are pure functions in `packages/core/src/ai` (unit-tested). `packages/ai` is the
+only code that calls the Anthropic SDK (`AiRunner`). `apps/worker/src/ai.ts` runs the jobs, and
+`packages/db/src/repo/ai.ts` reads the context and writes results back.
+
+**One call, step by step (`AiRunner.call`).**
+
+1. **Budget gate.** Today's spend (midnight to midnight in `APP_TIMEZONE`) is summed from
+   `ai_calls`. At or over `AI_DAILY_BUDGET_USD`, nothing is sent, a `budget_blocked` row is logged
+   and the caller keeps its template.
+2. **Redaction** (`AI_REDACT`, on by default). IPv4/IPv6, MAC addresses and serial-like tokens
+   become stable placeholders (`[IP-1]`, `[MAC-1]`, `[SERIAL-1]`). The cached prefix is redacted
+   first, so its placeholders get the same numbers in every call and the cache keeps hitting. The
+   answer is restored locally before it is stored. Hostnames and site names are sent (E1).
+3. **Prompt.** `system` is two blocks. The first is the stable prefix with `cache_control`: role,
+   built-in environment description, the operator's `AI_ENVIRONMENT_NOTES`, and the site profiles
+   as key-sorted JSON. The second is the task instructions. The volatile data (the incident or the
+   digest facts) goes in the user turn inside `<incident>` / `<facts>` tags, and the prompt says
+   that text is data, never instructions.
+4. **Request.** `client.beta.messages.create` with `output_config: {effort, format}`, where
+   `format` is the SDK's `betaZodOutputFormat(schema)` (JSON-schema structured output). It also
+   sends `fallbacks: "default"` (beta `server-side-fallback-2026-07-01`), so a policy decline on
+   Opus is rerouted server-side; on models without fallbacks the field is a no-op. There is a
+   per-call timeout (`AI_TIMEOUT_SEC`, doubled for digests) and one SDK-level retry for
+   429/5xx/connection errors. Forced `tool_choice` is not used: the current models reject it.
+5. **Checks.** `stop_reason: refusal` is final (`refused`). `max_tokens`, missing text, JSON that
+   fails the Zod schema, or a failed semantic check (a digest citing an `INC-<id>` that is not in
+   its facts) gets **one retry** with a note saying what was wrong. A second failure is
+   `fallback`. API errors are `error`; they are transient (timeouts, 429, 5xx) or permanent
+   (401, 400).
+6. **Log.** One `ai_calls` row per logical call: purpose, model, the model that actually answered
+   (a fallback may run), attempts, input/output/cache-read/cache-write tokens, latency, estimated
+   cost (list prices in `packages/core/src/ai/pricing.ts`; an unknown model is priced at the
+   dearest entry), status, error and request id. Prompts and answers are not logged.
+
+**Incident flow.**
+
+- **Trigger.** After each correlation cycle and every 30 s, the worker lists incidents where
+  `material_rev > ai_summary_material_rev`. These are real (not pre-existing), opened within 7
+  days, open or resolved within 6 h, and not in backoff. For each one it sends
+  `ai.incident.summary` with `singletonKey: inc:<id>` and `startAfter: AI_SUMMARY_DEBOUNCE_SEC`
+  (45 s) on a `stately` queue, so at most one is queued and one running per incident. A storm of
+  40 alerts produces one summary. The simulator shows 1–2 per scenario: opened, plus resolved or
+  re-scoped.
+- **Job.** It reads a snapshot of the incident: members, devices with role, status and model,
+  interfaces, the recent timeline, the last 30 days at the site, and the previous summary for
+  "what changed". It then runs the priority check, if `AI_PRIORITY_MODE` is not `off` and the
+  incident is open, and the summary.
+- **Write-back** (`applyAiEnrichment`). It takes the correlator's advisory lock, like a person's
+  action. The summary is always stored; it describes the snapshot. The priority step is applied
+  only if nothing material changed since the snapshot. The applied step is stored with its basis
+  (`kind/basePriority`), and the correlation engine re-applies it on later cycles only while that
+  basis holds (`effectivePriority`). The guardrail (`applyAiAdjustment`) is re-checked every time:
+  at most ±1, never below P2 for a site outage, a firewall down, or a harvest-critical site during
+  harvest, and never on monitoring-source-down. An applied change is a `priority_changed` event
+  with actor `ai` and bumps `material_rev`, so Teams gets an update card (and a page if a P2 became
+  a P1). `AI_PRIORITY_MODE=suggest` only shows the suggestion.
+- **Teams.** `incident_notify_state.ai_summary_posted` makes the first AI summary one follow-up
+  card ("Update n: Summary and first steps") on the channels routing already chose. It is never a
+  page, and maintenance and quiet hours apply as usual (`AI_POST_SUMMARY_UPDATE`). Later cards
+  carry the latest summary.
+- **Failures.** Transient failures back off at 2, 5, 15, 30 and 60 minutes, then give up on that
+  material change. When the budget is spent, the job retries after midnight. Refusals and invalid
+  answers are final for the change. `incidents.ai_status` says which, and the incident page
+  explains it next to the template.
+
+**Digests.** Facts are computed in SQL (`dailyDigestFacts` / `weeklyDigestFacts`):
+
+- **Daily:** incidents opened in the last 24 h, those still open, flapping devices (node state
+  changes), the busiest links (5-minute rollups), recurring subjects (3 or more incidents in 7
+  days), and noise.
+- **Weekly:** totals with median time to acknowledge and resolve, repeat offenders, sites whose
+  incident count or downtime doubled, capacity (95th-percentile utilization of 70 % or more, or
+  2+ days over 80 %), Orion alert rules that look misconfigured, and noise this week vs last. A
+  rule looks misconfigured when at least two of these hold: 60 % or more clear within 5 min, it
+  is never part of an incident above P4, or it has 100+ raises a week.
+
+Claude narrates; `templateDigest` renders the same facts when AI is off or fails. The fact table on
+the card is always from the facts. The digest is stored in `digests` (unique per kind and period,
+so a double cron fire is one digest), posted to `DIGEST_CHANNEL` (`#net-digest`, or the shadow
+channel) through the outbox, and readable at `/digests`. Settings → Digests has "Send now".
+
+**Budget alerts.** At 80 % and at 100 % of the daily budget, MAS posts one notice per day to the
+self-alert channel, and every page shows a banner.
+
+**Testing.** `tools/mock-swis` includes a fake Messages API (`/__mock/anthropic/v1/messages`). It
+answers MAS's prompts with schema-valid JSON built from the request, reports cache usage like the
+real API, and can be told to refuse, fail with 529, stall or answer badly. The unit tests, the
+integration test (`apps/worker/src/ai.int.test.ts`), the simulator and the e2e test all use it.
 
 ## 9. Notifications (implemented in M4)
 
@@ -542,7 +617,7 @@ sequenceDiagram
   browser, and the audit log redacts them. Environment variables (and `X_FILE` Docker
   secrets) still work and take precedence; those fields show as locked in the UI. We ship
   `.env.example` as an optional override list and never commit real values. Teams webhook
-  URLs (M4) will be stored the same way, as encrypted settings.
+  URLs and the Anthropic API key are stored the same way, as encrypted settings.
 - An `audit_log` row is written for every UI mutation, every kiosk token change, and
   every write-back to Orion.
 - **Self-monitoring.** The worker heartbeat is written every 15 s. `/api/health` returns
@@ -552,6 +627,12 @@ sequenceDiagram
   watching the watcher closes the loop. `DEADMAN_PING_URL` is also available.
 - Logs are structured JSON (pino), with redaction of `authorization`, passwords and
   webhook URLs.
+- **AI data handling.** Only `packages/ai` calls the Anthropic API, and only from the
+  worker. Prompts carry monitoring data, never credentials. IPs, MACs and serial numbers are
+  redacted by default. Alert text is fenced as data. Outputs are schema-checked and
+  length-limited, and the wall still runs them through `stripAddresses()`. Prompts and answers
+  are not logged; `ai_calls` records only purpose, model, tokens, time, cost and outcome. The
+  API key is a sealed setting like any other secret.
 - **Outbound hosts the VM needs:** Orion `:17774`, `login.microsoftonline.com` (sign-in), `api.anthropic.com`, the Teams Workflows
   host (`*.logic.azure.com` / `*.powerplatform.com`), `api.twilio.com`, `api.pushover.net`,
   and OSM tiles unless `MAP_MODE=image`.
@@ -565,6 +646,9 @@ sequenceDiagram
 | Interval ticks + stately queues for polls                         | pg-boss cron is minute-granular, but alerts need 30 s. Ticks enqueue, and the stately policy deduplicates across replicas.                                                                                                                                                                                 |
 | SSE over LISTEN/NOTIFY                                            | Real-time without extra infrastructure. Payloads stay small, and clients refetch over normal authenticated routes.                                                                                                                                                                                         |
 | Structured outputs instead of forced tool calls                   | Current Claude models reject forced `tool_choice`. JSON-schema output plus Zod gives the same guarantee.                                                                                                                                                                                                   |
+| AI writes back only through the correlation lock, with a basis    | A priority step is applied only if nothing material changed since the snapshot, and the engine re-applies it only while `kind/basePriority` still match, so a stale opinion can never hold a priority down after the situation changed.                                                                    |
+| Digests narrate deterministic facts                               | Numbers come from SQL; Claude only writes the bullets, and an answer citing an incident that is not in the facts is rejected. The template renders the same facts when AI is unavailable.                                                                                                                  |
+| A fake Messages API in mock-swis                                  | Tests, the simulator and e2e exercise the real SDK, structured output, retries, refusals, timeouts and cost accounting without an API key or network access.                                                                                                                                               |
 | **Node 22+** (images use Node 24 LTS)                             | Node 20 reached end of life in April 2026. pg-boss 12 and undici 8 require Node ≥ 22.                                                                                                                                                                                                                      |
 | TypeScript 5.9 (pinned)                                           | TS 7 (the native compiler) isn't supported yet by typescript-eslint or Next tooling.                                                                                                                                                                                                                       |
 | Settings in the DB, encrypted (not `.env`)                        | The requirement is set-up completely online with no config files. Secrets are sealed with a key that lives outside the DB, so a dump alone exposes nothing. Env vars still win for IaC.                                                                                                                    |

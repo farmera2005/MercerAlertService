@@ -6,6 +6,7 @@ import { randomInt } from 'node:crypto';
 import { and, asc, desc, eq, gte, inArray, isNull, lte, sql } from 'drizzle-orm';
 import {
   displayTitle,
+  readStoredAiSummary,
   type DispatchPlan,
   type NotificationPurpose,
   type NotifyIncident,
@@ -72,7 +73,9 @@ export async function loadDispatchCandidates(
            OR ${s.lastKind} <> ${i.kind}
            OR ${s.lastMaterialRev} <> ${i.materialRev}
            OR ${s.lastSnoozedUntil} IS DISTINCT FROM ${snoozeNow}
-           OR (${s.baselined} AND NOT ${i.seeded} AND ${i.status} IN ('open','acknowledged'))))`,
+           OR (${s.baselined} AND NOT ${i.seeded} AND ${i.status} IN ('open','acknowledged'))
+           OR (NOT ${s.baselined} AND NOT ${s.aiSummaryPosted} AND ${i.aiSummary} IS NOT NULL
+               AND ${i.status} IN ('open','acknowledged'))))`,
     )
     .orderBy(asc(i.id))
     .limit(limit);
@@ -107,7 +110,20 @@ export function toNotifyIncident(
     inMaintenance: i.inMaintenance,
     seeded: i.seeded,
     recoveryTargetMin: i.recoveryTargetMin,
+    ai: notifyAi(i.aiSummary),
   };
+}
+
+function notifyAi(value: unknown): NotifyIncident['ai'] {
+  const s = readStoredAiSummary(value);
+  return s
+    ? {
+        whatIsAffected: s.whatIsAffected,
+        likelyCause: s.likelyCause,
+        confidence: s.confidence,
+        firstSteps: s.firstSteps,
+      }
+    : null;
 }
 
 export function toNotifyState(r: StateRow): NotifyState {
@@ -121,6 +137,7 @@ export function toNotifyState(r: StateRow): NotifyState {
     pagedPersonIds: r.pagedPersonIds,
     lastSnoozedUntil: r.lastSnoozedUntil,
     baselined: r.baselined,
+    aiSummaryPosted: r.aiSummaryPosted,
   };
 }
 

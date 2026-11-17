@@ -15,6 +15,9 @@ const FILTERS: Array<[string, string]> = [
   ['site', 'Sites'],
   ['season', 'Seasons'],
   ['maintenance', 'Maintenance'],
+  ['notify.', 'Notifications'],
+  ['ai.', 'AI'],
+  ['digest.', 'Digests'],
 ];
 
 function short(v: unknown): string {

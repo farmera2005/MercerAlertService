@@ -102,6 +102,15 @@ export interface NotifyIncident {
   inMaintenance: boolean;
   seeded: boolean;
   recoveryTargetMin: number;
+  /** The AI summary when one exists (enrichment only: never changes who is notified). */
+  ai: NotifyAiSummary | null;
+}
+
+export interface NotifyAiSummary {
+  whatIsAffected: string;
+  likelyCause: string;
+  confidence: 'low' | 'medium' | 'high';
+  firstSteps: string[];
 }
 
 /** What has been notified so far for one incident (incident_notify_state). */
@@ -116,4 +125,6 @@ export interface NotifyState {
   lastSnoozedUntil: Date | null;
   /** Seen only as a pre-existing (seeded) incident: nothing was announced. */
   baselined: boolean;
+  /** A card carrying the AI summary has been posted. */
+  aiSummaryPosted: boolean;
 }

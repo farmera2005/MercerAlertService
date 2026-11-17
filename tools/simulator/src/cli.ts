@@ -40,6 +40,9 @@ for (const sim of list) {
   console.log(
     `      routing: Teams ${r.notify.channels.map((c) => `#${c}`).join(', ') || 'none'} · ${r.notify.pages} page(s)${r.notify.escalations ? ` · ${r.notify.escalations} escalation(s)` : ''}`,
   );
+  console.log(
+    `      AI: ${r.ai.summaries} summar${r.ai.summaries === 1 ? 'y' : 'ies'}, ${r.ai.priorityChecks} priority check(s), about US$${r.ai.costUsd.toFixed(3)} at list prices (fake model)`,
+  );
   for (const f of r.failures) console.log(`      ✗ ${f}`);
 }
 console.log(`\n${list.length - failed}/${list.length} scenarios passed`);

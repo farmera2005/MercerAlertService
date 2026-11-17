@@ -7,6 +7,7 @@ import {
 } from 'node:http';
 import { createServer as createHttps } from 'node:https';
 import { join } from 'node:path';
+import { createFakeAnthropic, type FakeAnthropic } from './anthropic';
 import { createSinks, type Sinks } from './sinks';
 import { buildScenario, type OutageMode, type Scenario, type ScenarioEnv } from './scenarios';
 import { entityTables, executeSwql, SwqlError } from './swql';
@@ -42,6 +43,8 @@ export interface MockSwis {
   stats: { queries: number; invokes: number };
   /** Notification sinks (Teams webhooks, Twilio, Pushover lookalikes). */
   sinks: Sinks;
+  /** A fake Anthropic Messages API at /__mock/anthropic/v1/messages. */
+  anthropic: FakeAnthropic;
   close(): Promise<void>;
 }
 
@@ -88,6 +91,7 @@ export async function startMockSwis(opts: MockSwisOptions = {}): Promise<MockSwi
   const timers = new Set<NodeJS.Timeout>();
   const stats = { queries: 0, invokes: 0 };
   const sinks = createSinks();
+  const anthropic = createFakeAnthropic();
 
   const env: ScenarioEnv = {
     get world() {
@@ -107,6 +111,8 @@ export async function startMockSwis(opts: MockSwisOptions = {}): Promise<MockSwi
       const raw = req.method === 'POST' ? await readBody(req) : '';
       const sink = sinks.handle(req.method ?? 'GET', path, req.headers, raw);
       if (sink) return send(res, sink[0], sink[1]);
+      const ai = await anthropic.handle(req.method ?? 'GET', path, req.headers, raw);
+      if (ai) return send(res, ai[0], ai[1]);
       const body = JSON.parse(raw || '{}');
       try {
         if (path === 'state') {
@@ -247,10 +253,16 @@ export async function startMockSwis(opts: MockSwisOptions = {}): Promise<MockSwi
       return s;
     },
     sinks,
+    anthropic,
     reset() {
       for (const t of timers) clearTimeout(t);
       timers.clear();
+      // Orion never hands out an AlertActiveID twice; keep counting past the old world's IDs so a
+      // client that saw them (MAS) doesn't mistake a new alert for an old one after a reset.
+      const seq = world.seq;
       world = buildWorld(now());
+      for (const k of Object.keys(seq) as Array<keyof typeof seq>)
+        world.seq[k] = Math.max(world.seq[k], seq[k]);
       tables = entityTables(world, drop);
       outage = 'none';
     },

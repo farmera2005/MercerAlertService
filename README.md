@@ -22,8 +22,8 @@ Design docs: [architecture](docs/architecture.md) · [database schema](docs/sche
 | 2. Correlation   | Dedupe, topology suppression, flap detection, incident lifecycle, priority scoring, seasons, maintenance, simulator                | **Done** |
 | 3. Dashboard v1  | Entra SSO, overview, incidents, site and node pages, SSE, wall display                                                             | **Done** |
 | 4. Notifications | Teams cards, Twilio/Pushover, on-call and escalation, shadow mode                                                                  | **Done** |
-| 5. AI            | Summaries, severity suggestion with guardrails, digests, budget, fallbacks                                                         | Next     |
-| 6. Polish        | Ask the network, trends, admin, hardening                                                                                          |          |
+| 5. AI            | Summaries, severity suggestion with guardrails, digests, budget, fallbacks                                                         | **Done** |
+| 6. Polish        | Ask the network, trends, admin, hardening                                                                                          | Next     |
 
 ---
 
@@ -37,7 +37,7 @@ Requirements:
   `login.microsoftonline.com` for Microsoft sign-in, `tile.openstreetmap.org` for the map
   (unless you use an offline map image), the Teams Workflows host (`*.logic.azure.com` /
   `*.powerplatform.com`), `api.pushover.net` and `api.twilio.com` for notifications, and
-  `api.anthropic.com` from Milestone 5.
+  `api.anthropic.com` for AI summaries and digests (optional).
 
 ```bash
 git clone <repo> /opt/mercer-alert-service && cd /opt/mercer-alert-service
@@ -221,6 +221,40 @@ Every message, including the ones deliberately not sent (maintenance, quiet hour
 no number on file…), is listed on the incident page. A channel or provider that keeps failing
 shows a red banner on every page and a self-alert in another channel.
 
+### AI summaries and digests (Claude, optional)
+
+Everything works without AI: incidents, priorities and notifications come from deterministic
+code and templates. With an Anthropic API key, Claude adds the following:
+
+- **A plain-English title and summary** for each incident: what is affected for the business,
+  the likely cause with a confidence level, first troubleshooting steps for our equipment, and
+  what changed since the last summary. The first summary is posted to Teams as one follow-up
+  card under the original alert. It never pages anyone.
+- **A second opinion on priority.** It may move an incident one level up or down, but code
+  stops it from lowering a site outage, a firewall down, or a harvest-critical site in harvest
+  below P2. The reason is shown on the incident. Set it to "show only" if you prefer.
+- **A morning digest** (07:00) and a **Monday trends report** in `#net-digest`, also kept under
+  **Digests**. Trends cover repeat offenders, sites getting worse, links running hot, and Orion
+  alert rules that look misconfigured.
+
+Set it up in **Settings → AI**: paste the key (console.anthropic.com → API keys), press **Test
+the connection**, and optionally describe your network in "Notes about our network" (circuits,
+backup links, scale systems). Before anything is sent, IP addresses, MAC addresses and serial
+numbers are replaced with placeholders such as `[IP-1]`; hostnames and site names are sent.
+
+Costs are controlled in three ways:
+
+- One summary per incident change, not one per alert: a 30-alert storm costs one or two.
+- The shared part of every prompt is cached.
+- A **daily budget** (US$5 by default). At 80 % a banner and a Teams notice appear; at 100 % MAS
+  uses templates until midnight.
+
+Settings → AI lists every call with its tokens, time and estimated cost. If the API is slow or
+down, nothing waits for it: the template stays and the summary is added when Claude answers.
+
+Digests use `#net-digest`: give that channel a Teams webhook in Settings → Notifications. Change
+the times or send one now in **Settings → Digests**.
+
 ### Orion write-back (optional)
 
 To have **Acknowledge** in MAS also acknowledge the alerts in Orion, create a second Orion
@@ -247,6 +281,9 @@ pnpm dev:web                     # http://localhost:3000 → setup wizard (code 
 ```
 
 In the wizard, set the base URL to `http://127.0.0.1:17774` with user `mas` / password `mas`.
+To try the AI features without an Anthropic key, enter any key in Settings → AI and set
+**API base URL** (under Advanced) to `http://127.0.0.1:17774/__mock/anthropic`: the mock answers
+like Claude would, with canned text.
 
 ### Simulating problems with the mock
 
@@ -385,6 +422,7 @@ packages/core     config + settings registry, encryption, logger, Orion vocabula
 packages/db       Drizzle schema, migrations, repositories, seed data
 packages/swis     SWIS client, SWQL catalog, schema probe, discovery, fixture sanitizer
 packages/notify   Teams Workflows, Twilio and Pushover providers behind one Notifier interface
+packages/ai       AiRunner: the only code that calls Claude (budget, redaction, caching, retry, call log)
 tools/mock-swis   mock SWIS server, synthetic Mercer-like world, storm scenarios, and
                   Teams/Twilio/Pushover sinks (GET /__mock/sink lists what was "sent")
 tools/simulator   replays storms through the real pipeline on a virtual clock and checks the incidents

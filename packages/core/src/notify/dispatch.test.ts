@@ -68,6 +68,7 @@ function ctx(over: Partial<DispatchContext> = {}): DispatchContext {
       short: 'https://mas/i/abc123',
     },
     formatTime: (d) => d.toISOString().slice(11, 16),
+    postAiSummary: true,
     ...over,
   };
 }
@@ -96,6 +97,7 @@ function incident(over: Partial<NotifyIncident> = {}): NotifyIncident {
     inMaintenance: false,
     seeded: false,
     recoveryTargetMin: 240,
+    ai: null,
     ...over,
   };
 }
@@ -266,6 +268,38 @@ describe('planDispatch: changes', () => {
     const back = planDispatch(incident({ materialRev: 3 }), resolved.state, ctx({ now: at(25) }));
     expect(JSON.stringify(back.messages[0]!.payload)).toContain('Reopened');
     expect(back.messages.map((m) => m.kind)).toEqual(['teams', 'sms']);
+  });
+});
+
+describe('planDispatch: AI summary follow-up', () => {
+  const ai = {
+    whatIsAffected: 'The scale house at Rockford Elevator is offline.',
+    likelyCause: 'WAN circuit down.',
+    confidence: 'medium' as const,
+    firstSteps: ['Check the ISP circuit'],
+  };
+  const opened = planDispatch(incident(), null, ctx());
+
+  it('posts one follow-up card when the first summary arrives, and pages nobody', () => {
+    const p = planDispatch(incident({ ai }), opened.state, ctx({ now: at(1) }));
+    expect(summary(p)).toEqual([['incident_update', 'teams', '#net-critical', null]]);
+    expect(JSON.stringify(p.messages[0]!.payload)).toContain('Update 1: Summary and first steps');
+    expect(p.state.aiSummaryPosted).toBe(true);
+    expect(planDispatch(incident({ ai }), p.state, ctx({ now: at(2) })).messages).toEqual([]);
+  });
+
+  it('does not post a follow-up when switched off, or when the open card already had it', () => {
+    const off = planDispatch(incident({ ai }), opened.state, ctx({ postAiSummary: false }));
+    expect(off.messages).toEqual([]);
+    expect(off.state.aiSummaryPosted).toBe(true); // so the dispatcher stops looking at it
+    const withAi = planDispatch(incident({ ai }), null, ctx());
+    expect(withAi.state.aiSummaryPosted).toBe(true);
+    expect(planDispatch(incident({ ai }), withAi.state, ctx({ now: at(1) })).messages).toEqual([]);
+  });
+
+  it('is suppressed like everything else during maintenance', () => {
+    const p = planDispatch(incident({ ai, inMaintenance: true }), opened.state, ctx());
+    expect(p.messages.map((m) => m.suppressReason)).toEqual(['maintenance']);
   });
 });
 

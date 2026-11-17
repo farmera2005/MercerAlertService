@@ -94,8 +94,12 @@ export interface IncidentState {
   materialRev: number;
   inMaintenance: boolean;
   seeded: boolean;
-  /** Fields owned by later milestones (AI suggestion) — carried through untouched. */
+  /**
+   * The applied AI adjustment (±1, already guarded) and the `kind/basePriority` it was made for.
+   * Written only by the AI job; the engine re-applies it while the basis still holds.
+   */
   aiPriorityAdjust: number | null;
+  aiPriorityBasis: string | null;
   members: Map<string, MemberRole>;
 }
 
@@ -228,6 +232,9 @@ export interface PriorityFactors {
   timeMult: number;
   score: number;
   explanation: string[];
+  /** Guardrail context for AI suggestions (absent on rows scored before M5). */
+  firewallDown?: boolean;
+  harvestCriticalInHarvest?: boolean;
 }
 
 export interface IncidentEventOut {

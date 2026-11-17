@@ -119,3 +119,29 @@ export function bucketStart(date: Date, minutes: number): Date {
   const width = minutes * 60_000;
   return new Date(Math.floor(date.getTime() / width) * width);
 }
+
+/** Midnight at the start of `date`'s calendar day in `timeZone`, as a UTC instant. */
+export function startOfZonedDay(date: Date, timeZone: string): Date {
+  const p = zonedParts(date, timeZone);
+  return zonedTimeToUtc(p.year, p.month, p.day, 0, 0, 0, 0, timeZone);
+}
+
+/** `days` calendar days later (or earlier) at local midnight; DST-safe. */
+export function addZonedDays(dayStart: Date, days: number, timeZone: string): Date {
+  const p = zonedParts(new Date(dayStart.getTime() + 12 * 3_600_000), timeZone);
+  return zonedTimeToUtc(p.year, p.month, p.day + days, 0, 0, 0, 0, timeZone);
+}
+
+const pad2 = (n: number) => String(n).padStart(2, '0');
+
+/** "2026-10-14 10:05" in `timeZone` (for prompts, digests and logs read by people). */
+export function localDateTime(date: Date, timeZone: string): string {
+  const p = zonedParts(date, timeZone);
+  return `${p.year}-${pad2(p.month)}-${pad2(p.day)} ${pad2(p.hour)}:${pad2(p.minute)}`;
+}
+
+/** The same local wall-clock time `days` calendar days later (or earlier); DST-safe. */
+export function shiftZonedDays(date: Date, days: number, timeZone: string): Date {
+  const p = zonedParts(date, timeZone);
+  return zonedTimeToUtc(p.year, p.month, p.day + days, p.hour, p.minute, 0, 0, timeZone);
+}

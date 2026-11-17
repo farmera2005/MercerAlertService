@@ -215,6 +215,8 @@ export function scoreIncident(i: ScoreInput): ScoreResult {
       timeMult,
       score,
       explanation,
+      firewallDown: i.firewallDown,
+      harvestCriticalInHarvest,
     },
   };
 }

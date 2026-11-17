@@ -171,6 +171,7 @@ async function sharedContext(d: NotifyDeps, now: Date): Promise<Shared> {
     pageRateLimit: cfg.notify.pageRateLimit,
     providers: { sms: !!cfg.notify.twilio, pushover: !!cfg.notify.pushover },
     formatTime: (t) => timeFmt.format(t),
+    postAiSummary: cfg.ai.postSummaryUpdate,
     hoursFor: (site) => isWithinHours(now, site ? siteHours(site, harvest) : DEFAULT_HOURS, tz),
   };
 }

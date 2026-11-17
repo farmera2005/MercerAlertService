@@ -148,6 +148,18 @@ export function teamsCard(i: NotifyIncident, o: CardOptions): TeamsPayload {
   });
   if (o.kind === 'escalation' && o.change) body.push(text(o.change, { color: 'attention' }));
   body.push(text(i.summary));
+  if (i.ai && o.kind !== 'resolved') {
+    body.push({
+      type: 'Container',
+      style: 'emphasis',
+      items: [
+        text('Summary (AI)', { weight: 'Bolder', size: 'Small', isSubtle: true }),
+        text(`**Affected:** ${i.ai.whatIsAffected}`),
+        text(`**Likely cause** (${i.ai.confidence} confidence): ${i.ai.likelyCause}`),
+        text(`**First steps**\n${i.ai.firstSteps.map((s, n) => `${n + 1}. ${s}`).join('\n')}`),
+      ],
+    });
+  }
   const end = i.resolvedAt ?? o.now;
   body.push({
     type: 'FactSet',

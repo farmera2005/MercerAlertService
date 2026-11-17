@@ -33,11 +33,18 @@ export interface NotifySummary {
   escalations: number;
 }
 
+export interface AiSummary {
+  summaries: number;
+  priorityChecks: number;
+  costUsd: number;
+}
+
 export interface SimResult {
   scenario: SimScenario;
   incidents: IncidentSummary[];
   noise: { rawAlerts: number; incidents: number; ratio: number | null };
   notify: NotifySummary;
+  ai: AiSummary;
   failures: string[];
   ms: number;
 }
@@ -71,8 +78,14 @@ export function check(
   incidents: IncidentSummary[],
   noise: SimResult['noise'],
   notify?: NotifySummary,
+  ai?: AiSummary,
 ): string[] {
   const failures: string[] = [];
+  if (expect.ai && ai) {
+    if (ai.summaries < 1) failures.push('AI: expected at least one summary, got none');
+    if (ai.summaries > expect.ai.maxSummaries)
+      failures.push(`AI: expected ≤ ${expect.ai.maxSummaries} summaries, got ${ai.summaries}`);
+  }
   if (expect.notify && notify) {
     const want = [...expect.notify.channels].sort().join(', ');
     const got = [...notify.channels].sort().join(', ');
@@ -163,6 +176,9 @@ export async function runScenario(sim: SimScenario, databaseUrl: string): Promis
     // Breaker timing is wall-clock; detect outages via virtual staleness instead.
     SWIS_BREAKER_THRESHOLD: '100000',
     SWIS_STALE_AFTER_SEC: '120',
+    // The mock's fake Claude: deterministic answers, real call accounting.
+    ANTHROPIC_API_KEY: 'sim',
+    ANTHROPIC_BASE_URL: `${mock.url}/__mock/anthropic`,
   };
   const worker = createWorker(loadConfig(env), { scheduling: false, env, log: silent, now });
   try {
@@ -195,7 +211,13 @@ export async function runScenario(sim: SimScenario, databaseUrl: string): Promis
       if (t % 180 === 0) await worker.pollOnce('interfaces');
       await worker.correlateOnce({ reconcile: false });
       await worker.notifyOnce();
+      // The real worker debounces per incident (45 s); a once-a-minute pass is the same here.
+      if (t % 60 === 0) {
+        await worker.aiOnce();
+        await worker.notifyOnce();
+      }
     }
+    await worker.aiOnce();
 
     const rows = await listIncidents(h.db, { limit: 500 });
     const incidents = rows
@@ -223,12 +245,21 @@ export async function runScenario(sim: SimScenario, databaseUrl: string): Promis
       pages: smsBodies.filter((b) => !b.startsWith('RESOLVED')).length,
       escalations: smsBodies.filter((b) => b.startsWith('ESCALATED')).length,
     };
+    const calls = await h.pool.query<{ purpose: string; n: number; usd: string }>(
+      `select purpose, count(*)::int as n, coalesce(sum(cost_usd),0) as usd from ai_calls group by purpose`,
+    );
+    const ai: AiSummary = {
+      summaries: calls.rows.find((r) => r.purpose === 'summary')?.n ?? 0,
+      priorityChecks: calls.rows.find((r) => r.purpose === 'severity')?.n ?? 0,
+      costUsd: calls.rows.reduce((sum, r) => sum + Number(r.usd), 0),
+    };
     return {
       scenario: sim,
       incidents,
       noise,
       notify,
-      failures: check(sim.expect, incidents, noise, notify),
+      ai,
+      failures: check(sim.expect, incidents, noise, notify, ai),
       ms: Date.now() - started,
     };
   } finally {

@@ -10,16 +10,18 @@
     "typecheck": "tsc -p tsconfig.json"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "1.9.0",
+    "@mercer/ai": "workspace:*",
     "@mercer/core": "workspace:*",
     "@mercer/db": "workspace:*",
+    "@mercer/notify": "workspace:*",
     "@mercer/swis": "workspace:*",
     "drizzle-orm": "^0.45.4",
     "pg": "^8.23.1",
     "pg-boss": "^12.38.2",
     "pino": "^10.4.0",
     "undici": "^8.12.4",
-    "zod": "^4.6.7",
-    "@mercer/notify": "workspace:*"
+    "zod": "^4.6.7"
   },
   "devDependencies": {
     "@mercer/mock-swis": "workspace:*",

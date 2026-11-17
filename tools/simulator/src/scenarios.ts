@@ -24,6 +24,11 @@ export interface Expectation {
     /** The page escalated to the next person. */
     escalated?: boolean;
   };
+  /**
+   * AI enrichment against the mock's fake Claude: a storm must cost a handful of summaries (one
+   * per material change: opened, re-scoped, resolved), never one per alert.
+   */
+  ai?: { maxSummaries: number };
 }
 
 export interface SimScenario {
@@ -60,6 +65,7 @@ export const SCENARIOS: SimScenario[] = [
       titleIncludes: 'Site down — Rockford Elevator',
       // Nobody acknowledges in the simulator, so the page escalates at 15 min, before recovery.
       notify: { channels: ['net-critical'], paged: true, escalated: true },
+      ai: { maxSummaries: 2 }, // opened, resolved
     },
   },
   {
@@ -76,6 +82,7 @@ export const SCENARIOS: SimScenario[] = [
       minAlerts: 31,
       minNoiseRatio: 30,
       notify: { channels: ['net-critical'], paged: true, escalated: true },
+      ai: { maxSummaries: 1 }, // opened
     },
   },
   {
@@ -90,6 +97,7 @@ export const SCENARIOS: SimScenario[] = [
       priority: 'P3',
       titleIncludes: 'ROCK-AP01 flapping',
       notify: { channels: ['net-alerts'], paged: false },
+      ai: { maxSummaries: 2 }, // device down, then re-scoped as flapping
     },
   },
   {
@@ -105,6 +113,7 @@ export const SCENARIOS: SimScenario[] = [
       finalStatus: 'resolved',
       titleIncludes: 'UPS on battery',
       notify: { channels: ['net-critical'], paged: false },
+      ai: { maxSummaries: 2 }, // opened, resolved
     },
   },
   {
@@ -129,6 +138,7 @@ export const SCENARIOS: SimScenario[] = [
       priority: 'P3',
       titleIncludes: 'High interface utilization',
       notify: { channels: ['net-alerts'], paged: false },
+      ai: { maxSummaries: 1 }, // opened
     },
   },
   {
@@ -144,6 +154,7 @@ export const SCENARIOS: SimScenario[] = [
       finalStatus: 'resolved',
       titleIncludes: 'SolarWinds monitoring unavailable',
       notify: { channels: ['net-critical'], paged: true },
+      ai: { maxSummaries: 2 }, // opened, resolved
     },
   },
 ];
