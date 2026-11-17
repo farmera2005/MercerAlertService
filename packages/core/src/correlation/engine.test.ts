@@ -435,6 +435,30 @@ describe('correlation engine', () => {
     expect(inc().status).toBe('closed');
   });
 
+  it('keeps a manual resolve while alerts stay active; a new raise reopens it', () => {
+    const w = new World('2026-10-14T14:00:00Z');
+    w.alert('raised', { ...NODE_DOWN, nodeId: 22 });
+    w.status(22, 'down');
+    w.correlate();
+    const inc = () => [...w.incidents.values()][0]!;
+    // Someone resolves it in the dashboard while Orion still has the alert active.
+    Object.assign(inc(), { status: 'resolved', resolvedAt: w.now, resolvedBy: 'user:Pat' });
+    w.advance(60);
+    w.correlate();
+    expect(inc().status).toBe('resolved');
+    w.advance(1000);
+    w.correlate();
+    expect(inc().status).toBe('closed');
+    expect(w.incidents.size).toBe(1); // no duplicate for the still-active alert
+    // The alert clears and fires again: that is news.
+    w.alert('cleared', { ...NODE_DOWN, nodeId: 22 });
+    w.correlate();
+    w.advance(30);
+    w.alert('raised', { ...NODE_DOWN, nodeId: 22 });
+    w.correlate();
+    expect([...w.incidents.values()].filter((i) => i.status === 'open')).toHaveLength(1);
+  });
+
   it('holds back incidents during a maintenance window that suppresses them, then raises them', () => {
     const w = new World('2026-10-14T14:00:00Z');
     w.maintenance = [

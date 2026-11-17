@@ -155,9 +155,12 @@ class Engine {
       const r = this.records.get(key);
       if (r?.state === 'active') this.assign(r);
     }
-    // Active records not attached anywhere (maintenance ended, or previously suppressed).
+    // Active records with no incident (maintenance ended, or previously suppressed). A record
+    // still attached to an incident someone resolved by hand stays there: only a new raise
+    // (a signal above) reopens it, otherwise the next run would undo the person's decision.
     for (const r of this.records.values()) {
-      if (r.state === 'active' && !this.attachedOpen(r) && !signals.has(r.key)) this.assign(r);
+      if (r.state === 'active' && (r.incidentRef === null || r.suppressed) && !signals.has(r.key))
+        this.assign(r);
     }
     this.repairUnknownSites();
     for (const ref of this.reclassify) this.classify(this.incidents.get(ref)!);
@@ -339,11 +342,6 @@ class Engine {
       }
     }
     return this.downByAlert.has(nodeId);
-  }
-
-  private attachedOpen(r: AlertRecord): boolean {
-    const inc = r.incidentRef ? this.incidents.get(r.incidentRef) : undefined;
-    return !!inc && OPEN.has(inc.status);
   }
 
   private flapping(r: AlertRecord): { flapping: boolean; key: string; count: number } {
