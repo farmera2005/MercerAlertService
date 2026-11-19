@@ -6,6 +6,7 @@ export interface RetentionPolicy {
   pollRunsDays: number;
   auditDays: number;
   incidentDays?: number;
+  chatDays?: number;
 }
 
 /** [table, timestamp column, policy key]. Later milestones append incident/notification tables. */
@@ -49,6 +50,10 @@ export async function purgeExpired(
   out.digests = dg.rowCount ?? 0;
   const calls = await db.execute(sql`DELETE FROM ai_calls WHERE at < ${incCutoff}`);
   out.ai_calls = calls.rowCount ?? 0;
+  // Conversations go by their last activity (messages cascade).
+  const chatCutoff = new Date(now.getTime() - (policy.chatDays ?? 90) * 86_400_000);
+  const chats = await db.execute(sql`DELETE FROM chat_threads WHERE updated_at < ${chatCutoff}`);
+  out.chat_threads = chats.rowCount ?? 0;
   const links = await db.execute(sql`DELETE FROM short_links WHERE expires_at < ${now}`);
   out.short_links = links.rowCount ?? 0;
   for (const [table, column, key] of TARGETS) {

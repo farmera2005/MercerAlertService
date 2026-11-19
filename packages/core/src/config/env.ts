@@ -66,6 +66,7 @@ export const envSchema = z.object({
   RETENTION_POLL_RUNS_DAYS: int(30, 1),
   RETENTION_INCIDENT_DAYS: int(730, 30),
   RETENTION_AUDIT_DAYS: int(730, 30),
+  RETENTION_CHAT_DAYS: int(90, 1),
   RETENTION_CRON: str('15 3 * * *'),
 
   // --- Worker runtime ---
@@ -154,6 +155,11 @@ export const envSchema = z.object({
   AI_MODEL_SEVERITY: str(''),
   AI_MODEL_SUMMARY: str(''),
   AI_MODEL_DIGEST: str(''),
+  AI_MODEL_CHAT: str(''),
+  /** "Ask the network" in the dashboard (needs AI). */
+  AI_CHAT_ENABLED: bool(true),
+  /** Questions per person per hour. */
+  AI_CHAT_PER_HOUR: int(30, 1),
   /** Replace IPs, MACs and serial numbers with placeholders before anything is sent (E1). */
   AI_REDACT: bool(true),
   AI_DAILY_BUDGET_USD: num(5, 0, 10_000),
@@ -233,6 +239,7 @@ export interface AppConfig {
     pollRunsDays: number;
     incidentDays: number;
     auditDays: number;
+    chatDays: number;
     cron: string;
   };
   worker: { healthPort: number; heartbeatSec: number; deadmanPingUrl?: string };
@@ -270,7 +277,8 @@ export interface AppConfig {
     enabled: boolean;
     apiKey: string;
     baseUrl: string;
-    models: { severity: string; summary: string; digest: string };
+    models: { severity: string; summary: string; digest: string; chat: string };
+    chat: { enabled: boolean; perHour: number };
     redact: boolean;
     dailyBudgetUsd: number;
     timeoutMs: number;
@@ -465,6 +473,7 @@ export function loadConfig(
     'AI_MODEL_SEVERITY',
     'AI_MODEL_SUMMARY',
     'AI_MODEL_DIGEST',
+    'AI_MODEL_CHAT',
   ] as const)
     if (e[key] && !/^claude-[a-z0-9][a-z0-9.-]*$/.test(e[key]))
       fail(key, 'a Claude model ID such as claude-opus-5-5');
@@ -529,6 +538,7 @@ export function loadConfig(
       pollRunsDays: e.RETENTION_POLL_RUNS_DAYS,
       incidentDays: e.RETENTION_INCIDENT_DAYS,
       auditDays: e.RETENTION_AUDIT_DAYS,
+      chatDays: e.RETENTION_CHAT_DAYS,
       cron: e.RETENTION_CRON,
     },
     worker: {
@@ -587,7 +597,9 @@ export function loadConfig(
         severity: e.AI_MODEL_SEVERITY || e.AI_MODEL_FAST,
         summary: e.AI_MODEL_SUMMARY || e.AI_MODEL_STRONG,
         digest: e.AI_MODEL_DIGEST || e.AI_MODEL_STRONG,
+        chat: e.AI_MODEL_CHAT || e.AI_MODEL_STRONG,
       },
+      chat: { enabled: e.AI_CHAT_ENABLED, perHour: e.AI_CHAT_PER_HOUR },
       redact: e.AI_REDACT,
       dailyBudgetUsd: e.AI_DAILY_BUDGET_USD,
       timeoutMs: e.AI_TIMEOUT_SEC * 1000,

@@ -27,6 +27,9 @@ x-app: &app
   logging:
     driver: json-file
     options: { max-size: '20m', max-file: '5' }
+  # The images run as the unprivileged `node` user and need no Linux capabilities.
+  cap_drop: [ALL]
+  security_opt: ['no-new-privileges:true']
 
 services:
   init:

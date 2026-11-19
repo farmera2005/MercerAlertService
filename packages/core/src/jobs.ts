@@ -53,3 +53,11 @@ export interface DigestRunResult {
   message: string;
   digestId?: number;
 }
+
+export const AI_CHAT_QUEUE = 'ai.chat';
+/** "Ask the network": answer the pending message `answerId` in thread `threadId`. */
+export const chatJobSchema = z.object({
+  threadId: z.number().int().positive(),
+  answerId: z.number().int().positive(),
+});
+export type ChatJob = z.infer<typeof chatJobSchema>;

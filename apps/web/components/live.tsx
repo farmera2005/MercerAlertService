@@ -11,7 +11,9 @@ import {
   type ReactNode,
 } from 'react';
 import { useRouter } from 'next/navigation';
-import { parseSseEvent } from '@mercer/core/events';
+import { parseSseEvent, type SseEvent } from '@mercer/core/events';
+
+export type ChatEvent = Extract<SseEvent, { t: 'chat' }>;
 
 /** Rendered by the server on every page load / refresh; the stream keeps it current in between. */
 export interface LiveInitial {
@@ -38,6 +40,8 @@ interface LiveValue {
   pollOkAt: Record<string, number | null>;
   workerBeatAt: number | null;
   stale: StaleInfo;
+  /** "Ask the network" progress for the signed-in person (the server filters by owner). */
+  subscribeChat: (listener: (ev: ChatEvent) => void) => () => void;
 }
 
 const LiveContext = createContext<LiveValue | null>(null);
@@ -82,6 +86,14 @@ export function LiveProvider({
     setSourceDown(initial.sourceDown);
     setOffsetMs(ms(initial.serverTime)! - Date.now());
   }, [initial]);
+
+  const chatListeners = useRef(new Set<(ev: ChatEvent) => void>());
+  const subscribeChat = useCallback((listener: (ev: ChatEvent) => void) => {
+    chatListeners.current.add(listener);
+    return () => {
+      chatListeners.current.delete(listener);
+    };
+  }, []);
 
   const offsetMsRef = useRef(offsetMs);
   useEffect(() => {
@@ -140,6 +152,9 @@ export function LiveProvider({
         case 'config':
           refreshSoon();
           break;
+        case 'chat':
+          for (const l of chatListeners.current) l(ev);
+          break;
       }
     };
     return () => es.close();
@@ -177,8 +192,19 @@ export function LiveProvider({
       pollOkAt,
       workerBeatAt,
       stale: { any: worker || swis || connection, worker, swis, connection, reason },
+      subscribeChat,
     };
-  }, [tick, offsetMs, workerBeatAt, pollOkAt, sourceDown, connected, lostAt, initial]);
+  }, [
+    tick,
+    offsetMs,
+    workerBeatAt,
+    pollOkAt,
+    sourceDown,
+    connected,
+    lostAt,
+    initial,
+    subscribeChat,
+  ]);
 
   return <LiveContext.Provider value={value}>{children}</LiveContext.Provider>;
 }

@@ -1,7 +1,9 @@
 import { SETTING_SECTIONS } from '@mercer/core';
-import { listUsers } from '@mercer/db';
+import { listLocalAccounts, listUsers } from '@mercer/db';
+import { LocalAccountsPanel } from '@/components/admin-panels';
 import { SettingsForm } from '@/components/settings-form';
 import { Alert, Badge, Card } from '@/components/ui';
+import { currentUser } from '@/lib/auth';
 import { server } from '@/lib/server';
 import { getSettingsState, sectionFields } from '@/lib/settings';
 import { entraRedirectUri } from '@/lib/sso';
@@ -11,7 +13,11 @@ export const dynamic = 'force-dynamic';
 export default async function SignInSettings() {
   const state = await getSettingsState();
   const cfg = state.cfg ?? server().bootstrap;
-  const users = await listUsers(server().db.db);
+  const [users, locals, me] = await Promise.all([
+    listUsers(server().db.db),
+    listLocalAccounts(server().db.db),
+    currentUser(),
+  ]);
   const redirectUri = entraRedirectUri(cfg);
   return (
     <div className="space-y-6">
@@ -104,6 +110,21 @@ export default async function SignInSettings() {
             </tbody>
           </table>
         )}
+      </Card>
+      <Card
+        title="Local administrator accounts"
+        description="Break-glass sign-in that works without Microsoft. Keep at least one, with a long password stored safely."
+      >
+        <LocalAccountsPanel
+          accounts={locals.map((a) => ({
+            id: a.id,
+            username: a.username,
+            lastLogin:
+              a.lastLoginAt?.toLocaleString('en-US', { timeZone: cfg.timezone }) ?? 'never',
+            disabled: !!a.disabledAt,
+            isYou: me?.kind === 'local' && me.id === a.id,
+          }))}
+        />
       </Card>
     </div>
   );

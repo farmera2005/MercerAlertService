@@ -1,3 +1,4 @@
+import { headers } from 'next/headers';
 import { redirect } from 'next/navigation';
 import type { ReactNode } from 'react';
 import { Shell } from '@/components/shell';
@@ -10,7 +11,13 @@ export const dynamic = 'force-dynamic';
 export default async function StepsLayout({ children }: { children: ReactNode }) {
   const user = await requireAdmin('/setup/orion');
   const state = await getSettingsState();
-  if (state.cfg?.setupComplete) redirect('/settings');
+  if (state.cfg?.setupComplete) {
+    // The wizard is done: each step lives on as its Settings tab.
+    const step = /^\/setup\/(orion|mapping|sites|general)\b/.exec(
+      (await headers()).get('x-mas-path') ?? '',
+    )?.[1];
+    redirect(step ? `/settings/${step}` : '/settings');
+  }
   return (
     <Shell user={user}>
       <h1 className="text-2xl font-semibold">Setup</h1>

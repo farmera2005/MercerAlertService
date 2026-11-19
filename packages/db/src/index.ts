@@ -28,3 +28,7 @@ export * from './repo/dashboard';
 export * from './repo/notify-admin';
 export * from './repo/notify';
 export * from './repo/ai';
+export * from './repo/trends';
+export * from './repo/chat';
+export * from './repo/chat-tools';
+export * from './repo/devices';

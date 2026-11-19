@@ -10,6 +10,7 @@ import {
   XAxis,
   YAxis,
 } from 'recharts';
+import { CHART_GRID, CHART_MUTED, CHART_SECONDARY, CHART_SURFACE } from '@/lib/chart-colors';
 
 export interface ChartSeries {
   key: string;
@@ -20,11 +21,10 @@ export interface ChartSeries {
 
 export type ChartPoint = { t: number } & Record<string, number | null>;
 
-const SURFACE = '#12161b';
-const GRID = '#2c2c2a';
-const MUTED = '#898781';
-const SECONDARY = '#c3c2b7';
-export const SERIES_COLORS = ['#3987e5', '#d95926'] as const;
+const SURFACE = CHART_SURFACE;
+const GRID = CHART_GRID;
+const MUTED = CHART_MUTED;
+const SECONDARY = CHART_SECONDARY;
 
 function fmtValue(v: number | null | undefined, unit: string): string {
   if (v === null || v === undefined || Number.isNaN(v)) return '—';
@@ -84,6 +84,18 @@ export function MetricChart({
     for (let i = data.length - 1; i >= 0; i--) if (data[i]![key] !== null) return i;
     return -1;
   };
+  // End labels would overprint when series finish close together (e.g. both at 0); the legend
+  // still names them then.
+  const ends = series.map((s) => {
+    const i = lastIndex(s.key);
+    return i >= 0 ? (data[i]![s.key] ?? null) : null;
+  });
+  const top = yMax ?? Math.max(1, ...data.flatMap((d) => series.map((s) => d[s.key] ?? 0)));
+  const endLabels =
+    multi &&
+    !ends.some((a, i) =>
+      ends.some((b, j) => j > i && a !== null && b !== null && Math.abs(a - b) / top < 0.08),
+    );
 
   const TooltipBody = ({ active, label }: { active?: boolean; label?: unknown }) => {
     if (!active || label === undefined) return null;
@@ -127,7 +139,7 @@ export function MetricChart({
           <ResponsiveContainer width="100%" height="100%">
             <ComposedChart
               data={data}
-              margin={{ top: 8, right: multi ? 56 : 12, bottom: 0, left: 0 }}
+              margin={{ top: 8, right: endLabels ? 56 : 12, bottom: 0, left: 0 }}
             >
               <CartesianGrid vertical={false} stroke={GRID} strokeWidth={1} />
               <XAxis
@@ -186,7 +198,7 @@ export function MetricChart({
                     connectNulls={false}
                     isAnimationActive={false}
                     label={
-                      multi
+                      endLabels
                         ? (p: { index?: number; x?: number | string; y?: number | string }) =>
                             p.index === last ? (
                               <text

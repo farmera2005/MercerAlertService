@@ -81,7 +81,8 @@ async function systemBanners(user: CurrentUser): Promise<Banner[]> {
     if (
       n.consecutiveFailures >= 3 &&
       !['outbox', 'correlation-backlog'].includes(n.key) &&
-      !n.key.startsWith('ai-')
+      !n.key.startsWith('ai-') &&
+      !n.key.startsWith('poller:')
     )
       out.push({
         tone: 'error',

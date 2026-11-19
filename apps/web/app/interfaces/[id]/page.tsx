@@ -1,12 +1,13 @@
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { getInterfaceDetail, interfaceMetricSeries } from '@mercer/db';
-import { MetricChart, SERIES_COLORS } from '@/components/metric-chart';
+import { MetricChart } from '@/components/metric-chart';
 import { RangeTabs, parseRange } from '@/components/range-tabs';
 import { Shell } from '@/components/shell';
 import { NodeStatus, bps, fmtTime, pct, ifaceLabel } from '@/components/status';
 import { Card } from '@/components/ui';
 import { requireUser } from '@/lib/auth';
+import { SERIES_COLORS } from '@/lib/chart-colors';
 import { server } from '@/lib/server';
 import { effectiveConfig } from '@/lib/settings';
 

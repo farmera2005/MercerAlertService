@@ -16,11 +16,15 @@ const frame = (ev: SseEvent) => enc.encode(`data: ${JSON.stringify(ev)}\n\n`);
  */
 export async function GET(req: NextRequest) {
   const kiosk = req.nextUrl.searchParams.get('k');
+  // Chat progress goes only to the person who asked; walls never get it.
+  let chatOwner: string | null = null;
   if (kiosk) {
     const check = await checkKioskToken(kiosk, req.headers);
     if (!check.ok) return new Response(null, { status: 403 });
-  } else if (!(await currentUser())) {
-    return new Response(null, { status: 401 });
+  } else {
+    const user = await currentUser();
+    if (!user) return new Response(null, { status: 401 });
+    chatOwner = `${user.kind}:${user.id}`;
   }
   if (streamCount() >= MAX_STREAMS) return new Response(null, { status: 503 });
 
@@ -30,7 +34,10 @@ export async function GET(req: NextRequest) {
       const send = (ev: SseEvent) => controller.enqueue(frame(ev));
       controller.enqueue(enc.encode('retry: 5000\n\n'));
       send({ t: 'hello', serverTime: new Date().toISOString() });
-      const unsubscribe = subscribe(send);
+      const unsubscribe = subscribe((ev) => {
+        if (ev.t === 'chat' && ev.user !== chatOwner) return;
+        send(ev);
+      });
       const ping = setInterval(() => controller.enqueue(enc.encode(': ping\n\n')), 15_000);
       // A revoked or expired wall link stops streaming within a minute.
       const recheck = kiosk

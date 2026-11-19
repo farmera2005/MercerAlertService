@@ -112,7 +112,13 @@ export async function startMockSwis(opts: MockSwisOptions = {}): Promise<MockSwi
       const sink = sinks.handle(req.method ?? 'GET', path, req.headers, raw);
       if (sink) return send(res, sink[0], sink[1]);
       const ai = await anthropic.handle(req.method ?? 'GET', path, req.headers, raw);
-      if (ai) return send(res, ai[0], ai[1]);
+      if (ai) {
+        if (ai[2]) {
+          res.writeHead(ai[0], { 'content-type': ai[2], 'cache-control': 'no-cache' });
+          return void res.end(ai[1] as string);
+        }
+        return send(res, ai[0], ai[1]);
+      }
       const body = JSON.parse(raw || '{}');
       try {
         if (path === 'state') {

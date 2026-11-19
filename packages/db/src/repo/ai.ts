@@ -32,7 +32,6 @@ import {
   incidentEvents,
   incidentMembers,
   incidents,
-  interfaceMetrics5m,
   notifications,
   orionInterfaces,
   orionNodes,
@@ -42,6 +41,7 @@ import type { Db, DbOrTx } from '../client';
 import { listSeasons } from './calendar';
 import { publishEvent } from './events-bus';
 import { lockCorrelation } from './locks';
+import { flappingNodes, recurringProblems, topInterfaces } from './trends';
 
 export type AiCallRow = typeof aiCalls.$inferSelect;
 export type AiCallInsert = typeof aiCalls.$inferInsert;
@@ -646,81 +646,6 @@ async function noiseFacts(db: DbOrTx, start: Date, end: Date): Promise<NoiseFact
   };
 }
 
-/** Per-interface utilization stats over a period from the 5-minute rollups. */
-async function interfaceUtil(db: DbOrTx, start: Date, end: Date, limit: number) {
-  const util = sql<number>`greatest(coalesce(${interfaceMetrics5m.inUtilMax}, 0), coalesce(${interfaceMetrics5m.outUtilMax}, 0))`;
-  const avg = sql<number>`greatest(coalesce(${interfaceMetrics5m.inUtilAvg}, 0), coalesce(${interfaceMetrics5m.outUtilAvg}, 0))`;
-  return db
-    .select({
-      interfaceId: interfaceMetrics5m.interfaceId,
-      iface: sql<string>`coalesce(max(${orionInterfaces.caption}), max(${orionInterfaces.name}), 'interface')`,
-      node: sql<string>`max(${orionNodes.caption})`,
-      site: sql<string | null>`max(${sites.name})`,
-      peak: sql<number>`round(max(${util})::numeric)::int`,
-      avg: sql<number>`round(avg(${avg})::numeric)::int`,
-      p95: sql<number>`round((percentile_cont(0.95) within group (order by ${avg}))::numeric)::int`,
-      daysOver80: sql<number>`count(distinct date_trunc('day', ${interfaceMetrics5m.bucket})) filter (where ${avg} >= 80)::int`,
-    })
-    .from(interfaceMetrics5m)
-    .innerJoin(orionInterfaces, eq(orionInterfaces.interfaceId, interfaceMetrics5m.interfaceId))
-    .innerJoin(orionNodes, eq(orionNodes.nodeId, orionInterfaces.nodeId))
-    .leftJoin(sites, eq(sites.id, orionNodes.siteId))
-    .where(and(gte(interfaceMetrics5m.bucket, start), lt(interfaceMetrics5m.bucket, end)))
-    .groupBy(interfaceMetrics5m.interfaceId)
-    .orderBy(desc(sql`max(${util})`))
-    .limit(limit);
-}
-
-/** Node state changes per node over a period (flapping candidates). */
-async function nodeChanges(db: DbOrTx, start: Date, end: Date, min: number) {
-  return db
-    .select({
-      node: sql<string>`max(${orionNodes.caption})`,
-      site: sql<string | null>`max(${sites.name})`,
-      changes: sql<number>`count(*)::int`,
-    })
-    .from(entityTransitions)
-    .innerJoin(orionNodes, eq(orionNodes.nodeId, entityTransitions.nodeId))
-    .leftJoin(sites, eq(sites.id, orionNodes.siteId))
-    .where(
-      and(
-        eq(entityTransitions.kind, 'node'),
-        gte(entityTransitions.observedAt, start),
-        lt(entityTransitions.observedAt, end),
-      ),
-    )
-    .groupBy(entityTransitions.nodeId)
-    .having(sql`count(*) >= ${min}`)
-    .orderBy(desc(sql`count(*)`))
-    .limit(10);
-}
-
-/** Incidents grouped by root device (or site when there is no single device). */
-async function incidentsBySubject(db: DbOrTx, start: Date, end: Date) {
-  const subject = sql<string>`coalesce(${orionNodes.caption}, ${sites.name}, 'unknown')`;
-  return db
-    .select({
-      subject,
-      site: sql<string | null>`max(${sites.name})`,
-      incidents: sql<number>`count(*)::int`,
-      downMinutes: sql<number>`coalesce(sum(extract(epoch from (coalesce(${incidents.resolvedAt}, ${end}::timestamptz) - ${incidents.openedAt})) / 60), 0)::int`,
-      ids: sql<number[]>`array_agg(${incidents.id} order by ${incidents.id} desc)`,
-    })
-    .from(incidents)
-    .leftJoin(orionNodes, eq(orionNodes.nodeId, incidents.rootNodeId))
-    .leftJoin(sites, eq(sites.id, incidents.primarySiteId))
-    .where(
-      and(
-        gte(incidents.openedAt, start),
-        lt(incidents.openedAt, end),
-        eq(incidents.seeded, false),
-        sql`coalesce(${incidents.resolvedBy}, '') <> 'merged'`,
-      ),
-    )
-    .groupBy(subject)
-    .orderBy(desc(sql`count(*)`));
-}
-
 export async function dailyDigestFacts(
   db: DbOrTx,
   periodStart: Date,
@@ -747,9 +672,9 @@ export async function dailyDigestFacts(
     .where(inArray(incidents.status, ['open', 'acknowledged']))
     .orderBy(asc(incidents.priority), asc(incidents.id))
     .limit(40);
-  const links = await interfaceUtil(db, periodStart, periodEnd, 5);
+  const links = await topInterfaces(db, { start: periodStart, end: periodEnd, limit: 5 });
   const weekAgo = addZonedDays(periodEnd, -7, timeZone);
-  const recurring = (await incidentsBySubject(db, weekAgo, periodEnd)).filter(
+  const recurring = (await recurringProblems(db, { start: weekAgo, end: periodEnd })).filter(
     (r) => r.incidents >= 3,
   );
   const seasons = await listSeasons(db);
@@ -761,7 +686,9 @@ export async function dailyDigestFacts(
     inHarvest: isHarvest(seasons, periodEnd, timeZone),
     overnight: overnight.map((r) => digestIncident(r, timeZone)),
     stillOpen: stillOpen.map((r) => digestIncident(r, timeZone)),
-    flapping: (await nodeChanges(db, periodStart, periodEnd, 6)).map((r) => ({
+    flapping: (
+      await flappingNodes(db, { start: periodStart, end: periodEnd, min: 6, limit: 10 })
+    ).map((r) => ({
       node: r.node,
       site: r.site,
       changes: r.changes,
@@ -818,7 +745,7 @@ export async function weeklyDigestFacts(
   const ack = week.map((w) => mins(w.openedAt, w.acknowledgedAt)).filter((n) => n !== null);
   const res = week.map((w) => mins(w.openedAt, w.resolvedAt)).filter((n) => n !== null);
 
-  const thisWeek = await incidentsBySubject(db, periodStart, periodEnd);
+  const thisWeek = await recurringProblems(db, { start: periodStart, end: periodEnd });
   const bySite = async (start: Date, end: Date) =>
     new Map(
       (
@@ -863,7 +790,7 @@ export async function weeklyDigestFacts(
     .sort((a, b) => b.incidents - a.incidents || b.downMinutes - a.downMinutes)
     .slice(0, 6);
 
-  const capacity = (await interfaceUtil(db, periodStart, periodEnd, 30))
+  const capacity = (await topInterfaces(db, { start: periodStart, end: periodEnd, limit: 30 }))
     .filter((c) => c.p95 >= 70 || c.daysOver80 >= 2)
     .sort((a, b) => b.p95 - a.p95)
     .slice(0, 6);

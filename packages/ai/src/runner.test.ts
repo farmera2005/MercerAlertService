@@ -16,8 +16,11 @@ beforeAll(async () => {
     req.on('end', () => {
       const path = (req.url ?? '').split('?')[0]!.replace(/^\/__mock\//, '');
       void fake.handle(req.method ?? 'GET', path, req.headers, raw).then((r) => {
-        res.writeHead(r?.[0] ?? 404, { 'content-type': 'application/json', 'request-id': 'req_1' });
-        res.end(JSON.stringify(r?.[1] ?? { error: 'not found' }));
+        res.writeHead(r?.[0] ?? 404, {
+          'content-type': r?.[2] ?? 'application/json',
+          'request-id': 'req_1',
+        });
+        res.end(r?.[2] ? (r[1] as string) : JSON.stringify(r?.[1] ?? { error: 'not found' }));
       });
     });
   });

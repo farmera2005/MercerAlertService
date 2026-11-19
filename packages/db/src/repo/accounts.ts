@@ -2,6 +2,7 @@ import { and, eq, gt, isNull, lt, sql } from 'drizzle-orm';
 import { localAccounts, webSessions } from '../schema';
 import type { Db, DbOrTx } from '../client';
 import { writeAudit } from './audit';
+import type { Actor } from './settings';
 
 export type LocalAccount = typeof localAccounts.$inferSelect;
 
@@ -104,4 +105,103 @@ export async function deleteSession(db: DbOrTx, idHash: string): Promise<void> {
 
 export async function purgeExpiredSessions(db: DbOrTx, now = new Date()): Promise<void> {
   await db.delete(webSessions).where(lt(webSessions.expiresAt, now));
+}
+
+// ---------------------------------------------------------------------------------------------
+// Local (break-glass) accounts, managed in Settings → Sign-in
+// ---------------------------------------------------------------------------------------------
+
+export async function listLocalAccounts(db: DbOrTx) {
+  return db
+    .select({
+      id: localAccounts.id,
+      username: localAccounts.username,
+      createdAt: localAccounts.createdAt,
+      lastLoginAt: localAccounts.lastLoginAt,
+      disabledAt: localAccounts.disabledAt,
+    })
+    .from(localAccounts)
+    .orderBy(localAccounts.username);
+}
+
+export async function createLocalAccount(
+  db: Db,
+  input: { username: string; passwordHash: string },
+  actor: Actor,
+): Promise<{ ok: true; id: number } | { ok: false; error: string }> {
+  return db.transaction(async (tx) => {
+    if (await findAccountByUsername(tx, input.username))
+      return { ok: false, error: 'That username is taken.' };
+    const [a] = await tx
+      .insert(localAccounts)
+      .values({ username: input.username, passwordHash: input.passwordHash })
+      .returning({ id: localAccounts.id });
+    await writeAudit(tx, {
+      ...actor,
+      action: 'auth.local.create',
+      targetType: 'local_account',
+      targetId: a!.id,
+      after: { username: input.username },
+    });
+    return { ok: true, id: a!.id };
+  });
+}
+
+/** New password; every session of that account ends. */
+export async function setLocalAccountPassword(
+  db: Db,
+  id: number,
+  passwordHash: string,
+  actor: Actor,
+): Promise<boolean> {
+  return db.transaction(async (tx) => {
+    const r = await tx
+      .update(localAccounts)
+      .set({ passwordHash })
+      .where(eq(localAccounts.id, id))
+      .returning({ username: localAccounts.username });
+    if (!r.length) return false;
+    await tx.delete(webSessions).where(eq(webSessions.accountId, id));
+    await writeAudit(tx, {
+      ...actor,
+      action: 'auth.local.password',
+      targetType: 'local_account',
+      targetId: id,
+      after: { username: r[0]!.username },
+    });
+    return true;
+  });
+}
+
+/** Disable or re-enable an account. The last active account cannot be disabled. */
+export async function setLocalAccountDisabled(
+  db: Db,
+  id: number,
+  disabled: boolean,
+  actor: Actor,
+  now = new Date(),
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  return db.transaction(async (tx) => {
+    await tx.execute(sql`select pg_advisory_xact_lock(4204202602)`);
+    if (disabled && (await countActiveAccounts(tx)) <= 1)
+      return {
+        ok: false,
+        error: 'This is the last active local account; keep it so someone can always sign in.',
+      };
+    const r = await tx
+      .update(localAccounts)
+      .set({ disabledAt: disabled ? now : null })
+      .where(eq(localAccounts.id, id))
+      .returning({ username: localAccounts.username });
+    if (!r.length) return { ok: false, error: 'No such account.' };
+    if (disabled) await tx.delete(webSessions).where(eq(webSessions.accountId, id));
+    await writeAudit(tx, {
+      ...actor,
+      action: disabled ? 'auth.local.disable' : 'auth.local.enable',
+      targetType: 'local_account',
+      targetId: id,
+      after: { username: r[0]!.username },
+    });
+    return { ok: true };
+  });
 }

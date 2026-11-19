@@ -37,6 +37,7 @@ import {
   finishEscalation,
   getNotification,
   listNotifierHealth,
+  listPollerStates,
   listOncallWeeks,
   listPeople,
   listRoutingRules,
@@ -416,6 +417,17 @@ export async function runSelfCheck(d: NotifyDeps): Promise<string[]> {
       title: 'MAS: correlation is falling behind',
       detail: `${backlog} Orion state changes are waiting to be correlated.`,
     });
+  // One poller failing while the others work (a query Orion rejects, a timeout on a big table).
+  // When they all fail, SolarWinds itself is down and that is already a P1 incident.
+  const pollers = await listPollerStates(d.db);
+  const failing = pollers.filter((p) => p.consecutiveFailures >= 5);
+  if (failing.length && failing.length < pollers.length)
+    for (const p of failing)
+      problems.push({
+        key: `poller:${p.poller}`,
+        title: `MAS: the ${p.poller} poller keeps failing`,
+        detail: `${p.consecutiveFailures} failures in a row. Last error: ${p.lastError?.slice(0, 200) ?? 'unknown'}.`,
+      });
   if (!problems.length) return raised;
 
   const byKey = new Map(health.map((h) => [h.key, h]));

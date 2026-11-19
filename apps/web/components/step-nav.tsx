@@ -70,9 +70,11 @@ export function StepFooter() {
 }
 
 export const SETTINGS_TABS = [
+  { href: '/settings/overview', label: 'Overview' },
   { href: '/settings/orion', label: 'SolarWinds' },
   { href: '/settings/mapping', label: 'Mapping' },
   { href: '/settings/sites', label: 'Sites' },
+  { href: '/settings/devices', label: 'Devices' },
   { href: '/settings/correlation', label: 'Correlation & priority' },
   { href: '/settings/seasons', label: 'Seasons' },
   { href: '/settings/maintenance', label: 'Maintenance' },

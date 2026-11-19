@@ -12,9 +12,12 @@ import { INTERNAL_SETTING_KEYS } from '@mercer/core';
 import { endSession, startSession } from '@/lib/auth';
 import { effectiveConfig } from '@/lib/settings';
 import { ENTRA_PROVIDER_ID, signIn } from '@/lib/sso';
-import { rateLimit, requestMeta } from '@/lib/request';
+import { noteFailure, rateLimit, requestMeta, tooManyFailures } from '@/lib/request';
 import { server } from '@/lib/server';
 import { checkSetupCode } from '@/lib/setup-code';
+
+const LOGIN_MAX_FAILURES = 10;
+const LOGIN_WINDOW_MS = 15 * 60_000;
 
 export interface AuthFormState {
   message?: string;
@@ -70,9 +73,16 @@ export async function loginAction(_: AuthFormState, form: FormData): Promise<Aut
   const username = String(form.get('username') ?? '').trim();
   const password = String(form.get('password') ?? '');
   const next = String(form.get('next') ?? '/');
+  // Failed attempts are limited per address and per account. Successful sign-ins don't count, so
+  // a shared break-glass account is not locked out by normal use. A looser cap on all attempts
+  // bounds the scrypt work one address can cause.
+  const failKeys = [
+    `login-user:${username.toLowerCase()}`,
+    ...(meta.ip ? [`login:${meta.ip}`] : []),
+  ];
   if (
-    (meta.ip && !rateLimit(`login:${meta.ip}`, 10, 15 * 60_000)) ||
-    !rateLimit(`login-user:${username.toLowerCase()}`, 10, 15 * 60_000)
+    failKeys.some((k) => tooManyFailures(k, LOGIN_MAX_FAILURES)) ||
+    (meta.ip && !rateLimit(`login-any:${meta.ip}`, 60, LOGIN_WINDOW_MS))
   ) {
     return { message: 'Too many attempts. Wait 15 minutes and try again.' };
   }
@@ -81,6 +91,7 @@ export async function loginAction(_: AuthFormState, form: FormData): Promise<Aut
   const ok =
     !!account && !account.disabledAt && (await verifyPassword(password, account.passwordHash));
   if (!ok || !account) {
+    for (const k of failKeys) noteFailure(k, LOGIN_WINDOW_MS);
     log.warn({ username, ip: meta.ip }, 'failed sign-in');
     return { message: 'Incorrect username or password.', values: { username } };
   }

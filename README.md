@@ -23,7 +23,7 @@ Design docs: [architecture](docs/architecture.md) · [database schema](docs/sche
 | 3. Dashboard v1  | Entra SSO, overview, incidents, site and node pages, SSE, wall display                                                             | **Done** |
 | 4. Notifications | Teams cards, Twilio/Pushover, on-call and escalation, shadow mode                                                                  | **Done** |
 | 5. AI            | Summaries, severity suggestion with guardrails, digests, budget, fallbacks                                                         | **Done** |
-| 6. Polish        | Ask the network, trends, admin, hardening                                                                                          | Next     |
+| 6. Polish        | Ask the network, trends, admin, hardening                                                                                          | **Done** |
 
 ---
 
@@ -78,13 +78,26 @@ Everything updates by itself (Server-Sent Events); the dot next to your name say
 - **Sites** and **devices:** Site Profile, devices (scale systems, servers and UPSes listed
   separately), problem interfaces, and response time / loss / CPU / memory / utilisation
   charts over 24 hours, 7 or 30 days.
+- **Trends:** over 24 hours, 7 or 30 days: raw Orion alerts and the incidents they became,
+  the noise ratio, **flapping devices**, **top talkers** (busiest interfaces by peak
+  utilisation), and **recurring problems** (the same kind of incident at the same place, again
+  and again). Each chart has a **Show table** button.
+- **Digests:** the archive of morning digests and Monday trend reports (with AI on).
+- **Ask:** questions about the network in plain English (with AI on; see below).
 - A red **DATA STALE** bar appears if the worker stops reporting or SolarWinds has not been
   polled successfully for a while.
 
-**Settings** (admins) has tabs for SolarWinds, mapping, sites, correlation and priority (with
-live examples), the **season calendar** (harvest Sept 1 – Dec 15, plus optional wheat-harvest
-and spring application periods), **maintenance windows** (one-off or weekly), **Sign-in**,
-**Map & wall**, General and the **Audit log**.
+**Settings** (admins) opens on an **Overview** checklist: what is configured, what is missing,
+and a link to each. The tabs cover SolarWinds, mapping, sites, **Devices**, correlation and
+priority (with live examples), the **season calendar** (harvest Sept 1 – Dec 15, plus optional
+wheat-harvest and spring application periods), **maintenance windows** (one-off or weekly),
+notifications, routing, on-call, AI, digests, **Sign-in**, **Map & wall**, General and the
+**Audit log**.
+
+**Settings → Devices** lists the nodes MAS could not place at a site (no or unknown Site
+custom property) and counts those that got the role _other_. Pin a node to a site and/or role
+there, with a reason. The override wins over Orion's custom properties from the next node poll
+on, and can be cleared at any time.
 
 ### Microsoft sign-in (Entra ID)
 
@@ -103,6 +116,10 @@ Settings → **Sign-in** shows the exact redirect URI and walks through the regi
 Members of the allowed group can view everything and acknowledge, snooze, resolve and add
 notes. Settings is limited to the admin group (or the addresses in "Admin e-mail addresses").
 The local administrator from setup keeps working under "Local administrator sign-in".
+
+Settings → Sign-in also manages **local administrator accounts**: add a second break-glass
+account, reset a password (which signs that account out everywhere), or disable one. MAS
+refuses to disable the last active local account.
 
 ### NOC wall display
 
@@ -255,6 +272,33 @@ down, nothing waits for it: the template stays and the summary is added when Cla
 Digests use `#net-digest`: give that channel a Teams webhook in Settings → Notifications. Change
 the times or send one now in **Settings → Digests**.
 
+### Ask the network
+
+**Ask** in the menu is a chat about the network, for example "What's wrong at Rockford right
+now?", "Which devices flapped most this week?", or "Is the Celina WAN link running hot?".
+Claude answers from MAS's own database through a fixed set of read-only lookups:
+
+- current status;
+- incident search and incident details;
+- sites and their devices;
+- device history;
+- interface utilisation;
+- flapping devices.
+
+It cannot run SQL, cannot reach SolarWinds or any device, and cannot change anything. You see
+each lookup as it happens, and the answer streams in.
+
+Every answer cites what it relied on, such as **INC-42**, **NODE-1234** or **SITE-ROCKFORD**.
+Each citation is a link, and the sources are listed under the answer. A citation that the
+lookups did not actually return is shown in amber as _unverified_.
+
+- **Privacy.** Conversations are private to the person who asked and are deleted after 90
+  days without activity (`RETENTION_CHAT_DAYS`). Addresses are redacted before anything is
+  sent, as for summaries.
+- **Limits.** Questions count against the daily AI budget. Each person can ask 30 questions
+  an hour (`AI_CHAT_PER_HOUR`).
+- **Turning it off.** Use the switch in Settings → AI.
+
 ### Orion write-back (optional)
 
 To have **Acknowledge** in MAS also acknowledge the alerts in Orion, create a second Orion
@@ -282,8 +326,9 @@ pnpm dev:web                     # http://localhost:3000 → setup wizard (code 
 
 In the wizard, set the base URL to `http://127.0.0.1:17774` with user `mas` / password `mas`.
 To try the AI features without an Anthropic key, enter any key in Settings → AI and set
-**API base URL** (under Advanced) to `http://127.0.0.1:17774/__mock/anthropic`: the mock answers
-like Claude would, with canned text.
+**API base URL** (under Advanced) to `http://127.0.0.1:17774/__mock/anthropic`. The mock answers
+like Claude would, with canned text. **Ask** works against the mock as well: it calls the real
+lookups, then answers by citing the first incident, device or site they returned.
 
 ### Simulating problems with the mock
 
@@ -324,8 +369,20 @@ older Orion version.
 
 If SWIS stops answering, the circuit breaker opens after `SWIS_BREAKER_THRESHOLD`
 consecutive failures, or no alert poll succeeds for `SWIS_STALE_AFTER_SEC`. Either way the
-worker records a **source down** transition. From Milestone 2 on, this raises a P1
-"Monitoring source down" incident.
+worker records a **source down** transition, and this raises a P1 "Monitoring source down"
+incident.
+
+**MAS alerts on itself.** Every minute the worker checks itself. For each problem it posts a
+self-alert to Teams, at most hourly, in a channel other than the one failing. It checks for:
+
+- a notification channel or provider that keeps failing;
+- messages stuck in the outbox;
+- a correlation backlog;
+- a SolarWinds poller that keeps failing while the others work.
+
+Failing channels and pollers also show a banner on every page. A dead worker can't report
+itself, but `/api/health` returns 503 for it, so the Orion HTTP monitor above (or
+`DEADMAN_PING_URL`) catches that case.
 
 ### Logs
 
@@ -346,8 +403,8 @@ docker compose exec -T db pg_restore -U mas -d mas --clean --if-exists < backups
 docker compose start worker web
 ```
 
-**Also keep a copy of the master key.** Secrets saved in the web UI (the Orion password and,
-later, webhook URLs and API keys) are encrypted with it. A database dump alone is useless
+**Also keep a copy of the master key.** Secrets saved in the web UI (the Orion password,
+webhook URLs and API keys) are encrypted with it. A database dump alone is useless
 for them without it, which is deliberate, so store the key somewhere separate from the dumps.
 
 ```bash
@@ -374,9 +431,38 @@ A nightly job (`RETENTION_CRON`, in ET) purges:
 
 - Raw transitions, metric rollups, Orion events and alert history after `RETENTION_RAW_DAYS` (90)
 - Poll runs after 30 days
+- Incidents (with their notifications), digests and AI call logs after `RETENTION_INCIDENT_DAYS` (2 years)
+- "Ask the network" conversations after `RETENTION_CHAT_DAYS` (90) without activity
 - The audit log after 2 years
 
-Incidents are kept for 2 years (from Milestone 2).
+All of these can be changed in Settings → General.
+
+### Security
+
+- **Read-only towards the network.** MAS never polls or logs in to devices. Everything comes
+  from SWIS, with a read-only Orion account. Write-back (acknowledging in Orion) is optional and
+  uses a separate account.
+- **TLS to Orion is verified.** The development-only skip flag logs an error every 10 minutes
+  and shows a red banner on every page.
+- **Secrets** are sealed with AES-256-GCM in the database. The master key lives in the
+  `bootstrap` volume. Secrets are never sent to the browser, never logged, and redacted in the
+  audit log.
+- **Every action is audited** in the same database transaction as the change. This covers
+  acknowledgements, notes, every setting, wall links, overrides, local accounts and chat
+  questions.
+- **Sign-in.** People sign in with Entra ID and group checks. Local accounts are for
+  break-glass only: passwords are hashed with scrypt, failed sign-ins are rate-limited, and a password
+  change revokes the account's sessions. Wall links are single-screen tokens, stored only as a
+  hash, with an optional address range and expiry.
+- **Browser hardening.** Every response carries `X-Content-Type-Options: nosniff`,
+  `X-Frame-Options: DENY`, `Referrer-Policy: same-origin` and a restrictive
+  `Permissions-Policy`. In production, a Content-Security-Policy keeps scripts, styles and
+  connections on the app's own origin and forbids framing. Images may come from any host,
+  because the map tile server is configurable. Put TLS (and HSTS) on your reverse proxy.
+- **Containers** run as the unprivileged `node` user with all Linux capabilities dropped and
+  `no-new-privileges`. Only the web port is published; the database listens on localhost.
+- **AI.** Claude only adds text and suggestions. IP addresses, MAC addresses and serial numbers
+  are replaced before anything is sent. The chat has read-only lookups and no SQL.
 
 ### Upgrades
 
@@ -404,8 +490,9 @@ pnpm simulate wan-down-harvest flapping-ap                                      
 pnpm db:generate     # after editing packages/db/src/schema/*; commit the generated SQL
 pnpm swis:record --rows 200 --hash-hostnames  # capture sanitized real fixtures
 pnpm dev:mock-swis -- --replay fixtures/swis/recorded
-# End-to-end (browser) tests against a FRESH stack: setup wizard, then overview (live update),
-# incident acknowledgement and the wall. They drive mock-swis through its control API on :17774.
+# End-to-end (browser) tests against a FRESH stack: setup wizard, overview (live update),
+# incident acknowledgement, the wall, notifications, AI, Ask the network, trends and admin.
+# They drive mock-swis (and its fake Claude) through its control API on :17774.
 docker compose --profile dev up -d --build
 E2E_SETUP_CODE=$(docker compose logs web | grep -o '"setupCode":"[^"]*"' | tail -1 | cut -d'"' -f4) pnpm test:e2e
 ```
@@ -422,7 +509,8 @@ packages/core     config + settings registry, encryption, logger, Orion vocabula
 packages/db       Drizzle schema, migrations, repositories, seed data
 packages/swis     SWIS client, SWQL catalog, schema probe, discovery, fixture sanitizer
 packages/notify   Teams Workflows, Twilio and Pushover providers behind one Notifier interface
-packages/ai       AiRunner: the only code that calls Claude (budget, redaction, caching, retry, call log)
+packages/ai       AiRunner: the only code that calls Claude (budget, redaction, caching, retry, call
+                  log) and the "Ask the network" tool loop
 tools/mock-swis   mock SWIS server, synthetic Mercer-like world, storm scenarios, and
                   Teams/Twilio/Pushover sinks (GET /__mock/sink lists what was "sent")
 tools/simulator   replays storms through the real pipeline on a virtual clock and checks the incidents

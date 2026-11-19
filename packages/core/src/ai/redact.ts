@@ -35,6 +35,12 @@ export class Redactor {
   private readonly counts: RedactionStats = { IP: 0, MAC: 0, SERIAL: 0 };
   private readonly keep: Set<string>;
 
+  /** More words that are context, not serials (e.g. hostnames and models a tool returned). */
+  addKeep(words: Iterable<string>): void {
+    for (const w of words)
+      for (const part of w.split(/[\s,;/()[\]]+/)) if (part) this.keep.add(part.toUpperCase());
+  }
+
   /**
    * `keep`: words that look like serials but are known not to be, such as device models
    * ("CyberPower OR1500LCDRM1U") and hostnames from the incident's own data. Addresses are
@@ -108,6 +114,26 @@ export class Redactor {
       ) as T;
     }
     return value;
+  }
+
+  /**
+   * The placeholder → value map, to continue a conversation later with the same numbering
+   * (a chat thread's history must stay byte-identical between turns).
+   */
+  exportState(): Record<string, string> {
+    return Object.fromEntries(this.byPlaceholder);
+  }
+
+  importState(state: Record<string, string>): this {
+    for (const [ph, value] of Object.entries(state)) {
+      const m = /^\[(IP|MAC|SERIAL)-(\d+)\]$/.exec(ph);
+      if (!m) continue;
+      const kind = m[1] as RedactionKind;
+      this.byPlaceholder.set(ph, value);
+      this.byValue.set(`${kind}:${value.toLowerCase()}`, ph);
+      this.counts[kind] = Math.max(this.counts[kind], Number(m[2]));
+    }
+    return this;
   }
 
   /** How many distinct values were replaced (recorded with each AI call). */

@@ -161,6 +161,7 @@ several worker replicas cannot double-poll. Wall-clock jobs use pg-boss cron wit
 | `ai.digest.daily`      | cron `DIGEST_DAILY_CRON` (`0 7 * * *` ET), or Settings → Digests → Send now                                             | singleton | M5 ✓      |
 | `ai.digest.weekly`     | cron `DIGEST_WEEKLY_CRON` (`30 7 * * 1` ET), or Send now                                                                | singleton | M5 ✓      |
 | `ai.test`              | Settings → AI → Test (the web request waits for the result)                                                             | standard  | M5 ✓      |
+| `ai.chat`              | each "Ask the network" question (3 in parallel per worker; stale pending answers are failed after 6 min)                | standard  | M6 ✓      |
 | `maint.selfcheck`      | every 60 s: failing notifiers, overdue outbox, correlation backlog                                                      | singleton | M4 ✓      |
 
 ## 5. SWIS integration
@@ -315,14 +316,14 @@ Claude only ever **enriches**. An incident, its priority and its templated Teams
 exist before any AI runs. Every AI failure leaves the template in place, and the AI never decides
 whether an alert exists or who is notified.
 
-| Task                    | Queue / trigger                                                  | Default model                         | Effort | Output                                                                         |
-| ----------------------- | ---------------------------------------------------------------- | ------------------------------------- | ------ | ------------------------------------------------------------------------------ |
-| Priority second opinion | `ai.incident.summary` (with the summary)                         | `claude-haiku-5-5` (`AI_MODEL_FAST`)  | low    | `{adjust: -1\|0\|1, reason}`, then guardrails in code                          |
-| Incident summary        | `ai.incident.summary`: on open and on material change, debounced | `claude-opus-5-5` (`AI_MODEL_STRONG`) | medium | title, short, whatIsAffected, likelyCause + confidence, firstSteps[], changes  |
-| Daily digest            | `ai.digest.daily`, cron `DIGEST_DAILY_CRON` (`0 7 * * *` ET)     | `AI_MODEL_STRONG`                     | medium | headline + sections of bullets, narrated from deterministic facts              |
-| Weekly trends           | `ai.digest.weekly`, cron `DIGEST_WEEKLY_CRON` (`30 7 * * 1` ET)  | `AI_MODEL_STRONG`                     | medium | same shape: repeat offenders, worsening sites, capacity, Orion rules to review |
-| Connection test         | `ai.test` (Settings → AI, the web request waits)                 | the summary model                     | low    | `{reply}`                                                                      |
-| Ask the network (chat)  | M6                                                               | `AI_MODEL_STRONG`                     | medium | read-only typed tools, never SQL, never SWIS                                   |
+| Task                    | Queue / trigger                                                   | Default model                         | Effort | Output                                                                            |
+| ----------------------- | ----------------------------------------------------------------- | ------------------------------------- | ------ | --------------------------------------------------------------------------------- |
+| Priority second opinion | `ai.incident.summary` (with the summary)                          | `claude-haiku-5-5` (`AI_MODEL_FAST`)  | low    | `{adjust: -1\|0\|1, reason}`, then guardrails in code                             |
+| Incident summary        | `ai.incident.summary`: on open and on material change, debounced  | `claude-opus-5-5` (`AI_MODEL_STRONG`) | medium | title, short, whatIsAffected, likelyCause + confidence, firstSteps[], changes     |
+| Daily digest            | `ai.digest.daily`, cron `DIGEST_DAILY_CRON` (`0 7 * * *` ET)      | `AI_MODEL_STRONG`                     | medium | headline + sections of bullets, narrated from deterministic facts                 |
+| Weekly trends           | `ai.digest.weekly`, cron `DIGEST_WEEKLY_CRON` (`30 7 * * 1` ET)   | `AI_MODEL_STRONG`                     | medium | same shape: repeat offenders, worsening sites, capacity, Orion rules to review    |
+| Connection test         | `ai.test` (Settings → AI, the web request waits)                  | the summary model                     | low    | `{reply}`                                                                         |
+| Ask the network (chat)  | `ai.chat`, one job per question (the web request returns at once) | `AI_MODEL_STRONG` (`AI_MODEL_CHAT`)   | medium | streamed answer citing `[INC-42]` / `[NODE-7]` / `[SITE-ROCK]`; 9 read-only tools |
 
 `AI_MODEL_SEVERITY`, `AI_MODEL_SUMMARY` and `AI_MODEL_DIGEST` override a single task.
 
@@ -410,6 +411,62 @@ channel) through the outbox, and readable at `/digests`. Settings → Digests ha
 
 **Budget alerts.** At 80 % and at 100 % of the daily budget, MAS posts one notice per day to the
 self-alert channel, and every page shows a banner.
+
+### Ask the network (M6)
+
+A chat panel at `/ask`. Claude answers questions about the network with **read-only, typed
+tools** over MAS's own database. It has no SQL, no SWIS, and no way to change anything.
+
+- **Tools** (`packages/core/src/ai/chat.ts` declares them; `packages/db/src/repo/chat-tools.ts`
+  implements them):
+
+  | Tool                        | What it returns                                                  |
+  | --------------------------- | ---------------------------------------------------------------- |
+  | `get_network_status`        | open incidents by priority, unhealthy sites, poller health       |
+  | `search_incidents`          | incidents filtered by title, status, priority, site and age      |
+  | `get_incident`              | one incident in detail                                           |
+  | `find_sites` / `get_site`   | site profiles, or one site with its devices and recent incidents |
+  | `find_nodes`                | devices matched by hostname, DNS name or address                 |
+  | `get_node_history`          | one device's status changes, metrics and incidents               |
+  | `get_interface_utilization` | top talkers                                                      |
+  | `get_flapping_devices`      | devices that changed state most often                            |
+
+  Every input is a Zod schema; all fields are required, and nullable where optional. The same
+  schema generates the tool's JSON schema and validates the input before anything runs, so an
+  invalid input comes back to the model as an error result. Every entity in a tool result
+  carries a `ref` (`INC-42`, `NODE-1234`, `SITE-ROCK`). Address columns are never returned.
+  `find_nodes` may _match_ by address but never returns one.
+
+- **Flow.** The web app stores the question and a pending answer in one audited transaction
+  (`chat.ask`), then queues `ai.chat`. The worker runs a manual, streamed tool loop
+  (`runChatTurn` in `packages/ai`):
+  - `client.beta.messages.stream()` with `fallbacks: "default"` and effort medium;
+  - the cached system prefix shared with summaries, plus a top-level cache breakpoint on the
+    conversation;
+  - tools with `eager_input_streaming`;
+  - at most 8 model requests and a 3-minute deadline per question.
+- **Logging and budget.** Each request is budget-checked and logged to `ai_calls`
+  (`purpose = chat`), and the answer row records its total cost.
+- **Live progress.** Each tool call (as a human-readable step) and the streamed answer text
+  (batched, ≤ 1,500 characters per event) go out on the event bus as `{t:'chat', user, …}`.
+  The SSE endpoint delivers them **only to the person who asked**, never to other users or the
+  wall. A missed event is harmless: `done` and a 10 s fallback refresh load the stored answer.
+- **History.** The thread keeps the API conversation exactly as sent (`chat_threads.history`,
+  redacted, thinking blocks included), appended only when a turn completes. A failed turn
+  leaves the history unchanged. Later questions therefore reuse the prompt cache, and the
+  model's earlier reasoning stays valid. `chat_threads.redaction` holds the placeholder map,
+  so `[IP-1]` means the same address in every turn.
+- **Citations.** The answer must cite with refs. The worker extracts them and checks each
+  against the refs the tools returned in that thread (`seen_refs`). Verified refs become links
+  with a "Sources" list; anything else shows as an amber, unverified chip.
+- **Limits and privacy:**
+  - 2,000 characters per question;
+  - `AI_CHAT_PER_HOUR` (30) questions per person;
+  - 25 questions per conversation;
+  - one pending answer per conversation.
+
+  Conversations are private to their owner and deleted after `RETENTION_CHAT_DAYS` (90). They
+  are off when AI is off or `AI_CHAT_ENABLED=false`.
 
 **Testing.** `tools/mock-swis` includes a fake Messages API (`/__mock/anthropic/v1/messages`). It
 answers MAS's prompts with schema-valid JSON built from the request, reports cache usage like the
@@ -625,8 +682,31 @@ sequenceDiagram
   report its own death, so we use Docker restart policies, the dashboard banner and wall
   stale banner, and optionally an Orion SAM HTTP monitor on `/api/health`. SolarWinds
   watching the watcher closes the loop. `DEADMAN_PING_URL` is also available.
+- **MAS alerts on itself** (§9): failing notifiers, an overdue outbox, a correlation
+  backlog, and (since M6) a SWIS poller that keeps failing while the others succeed. If every
+  poller fails, SWIS is down, and that is already the P1 "Monitoring source down" incident.
 - Logs are structured JSON (pino), with redaction of `authorization`, passwords and
   webhook URLs.
+- **HTTP hardening** (`apps/web/next.config.ts`). Every response sends:
+  - `X-Content-Type-Options: nosniff`;
+  - `X-Frame-Options: DENY`;
+  - `Referrer-Policy: same-origin`;
+  - a `Permissions-Policy` that denies camera, microphone and location.
+
+  In production there is also a CSP. It allows `'self'` for scripts, styles and connections;
+  inline scripts, because Next.js needs them; images from any host, for the configurable tile
+  server; and `frame-ancestors 'none'`. `/wall/*` also gets `Referrer-Policy: strict-origin`,
+  `no-store` and `noindex`, so the token in the path never leaks to tile servers or caches.
+  TLS and HSTS belong to the reverse proxy.
+
+- **Containers.** They run as `node` with `cap_drop: [ALL]` and `no-new-privileges`. Only
+  the one-shot `init` runs as root, to set file ownership on the bootstrap volume. Postgres
+  and mock-swis bind to `127.0.0.1` only.
+- **Local accounts** are break-glass. Passwords are hashed with scrypt. Failed sign-ins are
+  limited to 10 per 15 minutes per address and per user; successful ones don't count, and all
+  attempts are capped at 60 per address. Changing a password deletes that account's
+  sessions. The last active account cannot be disabled; an advisory lock serialises the
+  check.
 - **AI data handling.** Only `packages/ai` calls the Anthropic API, and only from the
   worker. Prompts carry monitoring data, never credentials. IPs, MACs and serial numbers are
   redacted by default. Alert text is fenced as data. Outputs are schema-checked and
@@ -648,6 +728,7 @@ sequenceDiagram
 | Structured outputs instead of forced tool calls                   | Current Claude models reject forced `tool_choice`. JSON-schema output plus Zod gives the same guarantee.                                                                                                                                                                                                   |
 | AI writes back only through the correlation lock, with a basis    | A priority step is applied only if nothing material changed since the snapshot, and the engine re-applies it only while `kind/basePriority` still match, so a stale opinion can never hold a priority down after the situation changed.                                                                    |
 | Digests narrate deterministic facts                               | Numbers come from SQL; Claude only writes the bullets, and an answer citing an incident that is not in the facts is rejected. The template renders the same facts when AI is unavailable.                                                                                                                  |
+| Chat with typed tools over the DB, not text-to-SQL                | Each tool is a Zod schema with a hand-written query, so the model can only ask questions we anticipated, results never include addresses, and a citation can be checked against the refs the tools actually returned. SQL generation would need a sandboxed role and still could not guarantee either.     |
 | A fake Messages API in mock-swis                                  | Tests, the simulator and e2e exercise the real SDK, structured output, retries, refusals, timeouts and cost accounting without an API key or network access.                                                                                                                                               |
 | **Node 22+** (images use Node 24 LTS)                             | Node 20 reached end of life in April 2026. pg-boss 12 and undici 8 require Node ≥ 22.                                                                                                                                                                                                                      |
 | TypeScript 5.9 (pinned)                                           | TS 7 (the native compiler) isn't supported yet by typescript-eslint or Next tooling.                                                                                                                                                                                                                       |

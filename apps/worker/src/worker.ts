@@ -13,6 +13,8 @@ import {
   notifyTestSchema,
   AI_TEST_QUEUE,
   aiTestSchema,
+  AI_CHAT_QUEUE,
+  chatJobSchema,
   DIGEST_QUEUES,
   digestRunSchema,
   type DigestRunResult,
@@ -73,6 +75,7 @@ import {
   type AiDeps,
   type IncidentAiResult,
 } from './ai';
+import { failStaleChats, runChatJob } from './chat';
 
 export type WorkerMode = 'awaiting_setup' | 'monitoring' | 'config_error';
 
@@ -96,6 +99,8 @@ export interface Worker {
   /** Run the AI for every incident that needs it, inline (tests, simulator). */
   aiOnce(): Promise<IncidentAiResult[]>;
   digestOnce(kind: 'daily' | 'weekly', opts?: { manual?: boolean }): Promise<DigestRunResult>;
+  /** Answer one "Ask the network" question inline (tests). */
+  chatOnce(job: { threadId: number; answerId: number }): ReturnType<typeof runChatJob>;
   health(): Promise<{ ok: boolean; details: Record<string, unknown> }>;
 }
 
@@ -500,6 +505,7 @@ export function createWorker(bootstrap: AppConfig, opts: WorkerOptions = {}): Wo
     selfCheckOnce: () => runSelfCheck(notifyDeps()),
     aiOnce,
     digestOnce: (kind, o) => runDigest(aiDeps(), kind, o),
+    chatOnce: (job) => runChatJob(aiDeps(), job),
 
     async start() {
       await reloadConfig();
@@ -639,6 +645,16 @@ export function createWorker(bootstrap: AppConfig, opts: WorkerOptions = {}): Wo
         });
       }
       await scheduleDigests();
+      // Ask the network: a few answers in parallel; each turn has its own deadline.
+      await boss.createQueue(AI_CHAT_QUEUE, { retryLimit: 0, expireInSeconds: 300 });
+      await boss.work(
+        AI_CHAT_QUEUE,
+        { pollingIntervalSeconds: 0.5, localConcurrency: 3 },
+        async ([job]) => {
+          if (!job) return;
+          return runChatJob(aiDeps(), chatJobSchema.parse(job.data));
+        },
+      );
       await boss.createQueue(AI_TEST_QUEUE, { retryLimit: 0, expireInSeconds: 180 });
       await boss.work(AI_TEST_QUEUE, { pollingIntervalSeconds: 0.5 }, async ([job]) => {
         await reloadConfig();
@@ -650,6 +666,15 @@ export function createWorker(bootstrap: AppConfig, opts: WorkerOptions = {}): Wo
       schedulePolls();
       baseTimers.push(setInterval(kickNotify, NOTIFY_TICK_SEC * 1000));
       baseTimers.push(setInterval(kickAi, AI_SWEEP_SEC * 1000));
+      baseTimers.push(
+        setInterval(
+          () =>
+            void failStaleChats(aiDeps()).catch((e: unknown) =>
+              log.warn({ err: errorMessage(e) }, 'could not clean up stale chat answers'),
+            ),
+          60_000,
+        ),
+      );
       baseTimers.push(setInterval(() => void beat(), cfg.worker.heartbeatSec * 1000));
       log.info(
         { mode, swis: isSwisConfigured(cfg.swis) ? cfg.swis.baseUrl : null },

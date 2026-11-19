@@ -32,6 +32,8 @@ export interface FakeAnthropicControl {
   severityAdjust?: -1 | 0 | 1;
   /** Make digests cite an incident that does not exist (tests the citation check). */
   inventIncident?: boolean;
+  /** Tools the fake calls, in order, before answering an "Ask the network" question. */
+  chatPlan?: Array<{ name: string; input: unknown }>;
 }
 
 export interface FakeAnthropic {
@@ -43,7 +45,7 @@ export interface FakeAnthropic {
     path: string,
     headers: Record<string, string | string[] | undefined>,
     raw: string,
-  ): Promise<[number, unknown] | null>;
+  ): Promise<[number, unknown, string?] | null>;
 }
 
 const tokens = (s: string) => Math.ceil(s.length / 4);
@@ -58,6 +60,7 @@ function taskOf(task: string): string {
   if (task.includes('second opinion on the priority')) return 'severity';
   if (task.includes('morning')) return 'digest_daily';
   if (task.includes('weekly trends')) return 'digest_weekly';
+  if (task.includes('Ask the network')) return 'chat';
   return 'other';
 }
 
@@ -121,15 +124,155 @@ function digestAnswer(user: string, invent: boolean, weekly: boolean): Record<st
   };
 }
 
+type ChatBlock = {
+  type: string;
+  text?: string;
+  content?: string | Array<{ type: string; text?: string }>;
+  name?: string;
+};
+
+function blocksText(content: string | ChatBlock[]): string {
+  if (typeof content === 'string') return content;
+  return content
+    .map((b) =>
+      b.type === 'text'
+        ? (b.text ?? '')
+        : b.type === 'tool_result'
+          ? typeof b.content === 'string'
+            ? b.content
+            : (b.content ?? []).map((c) => c.text ?? '').join('')
+          : '',
+    )
+    .join('\n');
+}
+
+/**
+ * "Ask the network": call the planned tools one per request, then answer from what they
+ * returned, citing the first incident, device and site refs found (like a careful model would).
+ */
+function chatReply(
+  messages: Array<{ role: string; content: string | ChatBlock[] }>,
+  plan: Array<{ name: string; input: unknown }>,
+  invent: boolean,
+  seq: number,
+): { content: unknown[]; stopReason: string } {
+  let q = messages.length - 1;
+  while (
+    q > 0 &&
+    !(
+      messages[q]!.role === 'user' &&
+      (typeof messages[q]!.content === 'string' ||
+        (messages[q]!.content as ChatBlock[]).some((b) => b.type === 'text'))
+    )
+  )
+    q--;
+  const after = messages.slice(q + 1);
+  const results = after
+    .filter((m) => m.role === 'user')
+    .flatMap((m) => (typeof m.content === 'string' ? [] : m.content))
+    .filter((b) => b.type === 'tool_result');
+  if (results.length < plan.length) {
+    const step = plan[results.length]!;
+    return {
+      content: [{ type: 'tool_use', id: `toolu_fake_${seq}`, name: step.name, input: step.input }],
+      stopReason: 'tool_use',
+    };
+  }
+  const seen = after.map((m) => blocksText(m.content)).join('\n');
+  const first = (re: RegExp) => re.exec(seen)?.[1];
+  const inc = first(/"(INC-\d+)"/);
+  const node = first(/"(NODE-\d+)"/);
+  const site = first(/"(SITE-[A-Z0-9_-]+)"/);
+  const ph = /\[(?:IP|MAC|SERIAL)-\d+\]/.exec(seen)?.[0];
+  const parts = [
+    inc ? `The most important open item is [${inc}].` : 'Nothing matches in the monitoring data.',
+    node ? `- The device involved is [${node}].` : '',
+    site ? `- It is at [${site}].` : '',
+    ph ? `- Its address shows as ${ph} in the data.` : '',
+    invent ? '- Also see [INC-999999].' : '',
+  ].filter(Boolean);
+  return { content: [{ type: 'text', text: parts.join('\n') }], stopReason: 'end_turn' };
+}
+
+/** The message as a Messages API event stream (text and tool input in small deltas). */
+function sse(
+  message: { content: unknown[]; usage: { output_tokens: number } } & Record<string, unknown>,
+): string {
+  const ev = (type: string, data: unknown) => `event: ${type}\ndata: ${JSON.stringify(data)}\n\n`;
+  const chunks = (s: string, n: number) => s.match(new RegExp(`[\\s\\S]{1,${n}}`, 'g')) ?? [];
+  let out = ev('message_start', {
+    type: 'message_start',
+    message: {
+      ...message,
+      content: [],
+      stop_reason: null,
+      usage: { ...message.usage, output_tokens: 1 },
+    },
+  });
+  message.content.forEach((raw, index) => {
+    const b = raw as { type: string; text?: string; input?: unknown; signature?: string };
+    if (b.type === 'text') {
+      out += ev('content_block_start', {
+        type: 'content_block_start',
+        index,
+        content_block: { type: 'text', text: '' },
+      });
+      for (const c of chunks(b.text ?? '', 7))
+        out += ev('content_block_delta', {
+          type: 'content_block_delta',
+          index,
+          delta: { type: 'text_delta', text: c },
+        });
+    } else if (b.type === 'tool_use') {
+      out += ev('content_block_start', {
+        type: 'content_block_start',
+        index,
+        content_block: { ...b, input: {} },
+      });
+      for (const c of chunks(JSON.stringify(b.input ?? {}), 9))
+        out += ev('content_block_delta', {
+          type: 'content_block_delta',
+          index,
+          delta: { type: 'input_json_delta', partial_json: c },
+        });
+    } else if (b.type === 'thinking') {
+      out += ev('content_block_start', {
+        type: 'content_block_start',
+        index,
+        content_block: { type: 'thinking', thinking: '', signature: '' },
+      });
+      out += ev('content_block_delta', {
+        type: 'content_block_delta',
+        index,
+        delta: { type: 'signature_delta', signature: b.signature ?? 'fake' },
+      });
+    }
+    out += ev('content_block_stop', { type: 'content_block_stop', index });
+  });
+  out += ev('message_delta', {
+    type: 'message_delta',
+    delta: {
+      stop_reason: message.stop_reason,
+      stop_sequence: null,
+      stop_details: message.stop_details ?? null,
+    },
+    usage: { output_tokens: message.usage.output_tokens },
+  });
+  out += ev('message_stop', { type: 'message_stop' });
+  return out;
+}
+
 export function createFakeAnthropic(): FakeAnthropic {
   const records: FakeAnthropicRecord[] = [];
   const cache = new Set<string>();
+  const DEFAULT_PLAN = [{ name: 'get_network_status', input: { division: null } }];
   let ctl: Required<Omit<FakeAnthropicControl, 'times'>> & { times: number } = {
     mode: 'ok',
     times: Infinity,
     delayMs: 0,
     severityAdjust: 0,
     inventIncident: false,
+    chatPlan: DEFAULT_PLAN,
   };
   let seq = 0;
   const header = (h: Record<string, string | string[] | undefined>, k: string) => {
@@ -142,7 +285,14 @@ export function createFakeAnthropic(): FakeAnthropic {
     clear() {
       records.length = 0;
       cache.clear();
-      ctl = { mode: 'ok', times: Infinity, delayMs: 0, severityAdjust: 0, inventIncident: false };
+      ctl = {
+        mode: 'ok',
+        times: Infinity,
+        delayMs: 0,
+        severityAdjust: 0,
+        inventIncident: false,
+        chatPlan: DEFAULT_PLAN,
+      };
     },
     control(c) {
       ctl = {
@@ -173,19 +323,18 @@ export function createFakeAnthropic(): FakeAnthropic {
         model: string;
         max_tokens: number;
         system?: Array<{ text: string; cache_control?: unknown }>;
-        messages: Array<{ content: string | Array<{ type: string; text?: string }> }>;
+        messages: Array<{ role: string; content: string | ChatBlock[] }>;
         output_config?: { effort?: string; format?: unknown };
         fallbacks?: unknown;
+        stream?: boolean;
+        tools?: Array<{ name: string }>;
       };
       const system = (body.system ?? []).map((b) => ({ text: b.text, cached: !!b.cache_control }));
-      const content = body.messages[0]?.content ?? '';
-      const user =
-        typeof content === 'string'
-          ? content
-          : content
-              .filter((b) => b.type === 'text')
-              .map((b) => b.text ?? '')
-              .join('\n');
+      // Everything the model would read in the conversation (questions and tool results).
+      const user = body.messages
+        .filter((m) => m.role === 'user')
+        .map((m) => blocksText(m.content))
+        .join('\n');
       const taskText = system.map((s) => s.text).join('\n');
       const task = taskOf(taskText);
       records.push({
@@ -214,11 +363,20 @@ export function createFakeAnthropic(): FakeAnthropic {
       const key = `${body.model}\n${stable}`;
       const hit = !!stable && cache.has(key);
       if (stable) cache.add(key);
-      const answer =
-        mode === 'invalid'
-          ? 'Sorry, here is some prose instead of JSON.'
-          : mode === 'refuse'
-            ? ''
+      seq++;
+      let content: unknown[];
+      let stopReason = 'end_turn';
+      if (mode === 'refuse') {
+        content = [];
+        stopReason = 'refusal';
+      } else if (task === 'chat') {
+        const r = chatReply(body.messages, ctl.chatPlan, invent, seq);
+        content = [{ type: 'thinking', thinking: '', signature: 'fake' }, ...r.content];
+        stopReason = r.stopReason;
+      } else {
+        const answer =
+          mode === 'invalid'
+            ? 'Sorry, here is some prose instead of JSON.'
             : JSON.stringify(
                 task === 'summary'
                   ? summaryAnswer(user)
@@ -234,35 +392,36 @@ export function createFakeAnthropic(): FakeAnthropic {
                       ? digestAnswer(user, invent, task === 'digest_weekly')
                       : { reply: 'OK' },
               );
-      seq++;
-      return [
-        200,
-        {
-          id: `msg_fake_${seq}`,
-          type: 'message',
-          role: 'assistant',
-          model: body.model,
-          content:
-            mode === 'refuse'
-              ? []
-              : [
-                  { type: 'thinking', thinking: '', signature: 'fake' },
-                  { type: 'text', text: answer },
-                ],
-          stop_reason: mode === 'refuse' ? 'refusal' : 'end_turn',
-          stop_sequence: null,
-          stop_details:
-            mode === 'refuse'
-              ? { type: 'refusal', category: null, explanation: 'The fake model declined.' }
-              : null,
-          usage: {
-            input_tokens: tokens(user) + tokens(taskText) - (stable ? tokens(stable) : 0),
-            output_tokens: tokens(answer) + 40,
-            cache_read_input_tokens: hit ? tokens(stable) : 0,
-            cache_creation_input_tokens: stable && !hit ? tokens(stable) : 0,
-          },
+        content = [
+          { type: 'thinking', thinking: '', signature: 'fake' },
+          { type: 'text', text: answer },
+        ];
+      }
+      const outText = JSON.stringify(content);
+      const message = {
+        id: `msg_fake_${seq}`,
+        type: 'message',
+        role: 'assistant',
+        model: body.model,
+        content,
+        stop_reason: stopReason,
+        stop_sequence: null,
+        stop_details:
+          mode === 'refuse'
+            ? { type: 'refusal', category: null, explanation: 'The fake model declined.' }
+            : null,
+        usage: {
+          input_tokens: Math.max(
+            1,
+            tokens(user) + tokens(taskText) - (stable ? tokens(stable) : 0),
+          ),
+          output_tokens: tokens(outText) + 40,
+          cache_read_input_tokens: hit ? tokens(stable) : 0,
+          cache_creation_input_tokens: stable && !hit ? tokens(stable) : 0,
         },
-      ];
+      };
+      if (body.stream) return [200, sse(message), 'text/event-stream'];
+      return [200, message];
     },
   };
 }

@@ -18,6 +18,17 @@ export const busEventSchema = z.discriminatedUnion('t', [
   z.object({ t: z.literal('incident'), id: z.number().int(), change: z.string() }),
   z.object({ t: z.literal('heartbeat'), component: z.string() }),
   z.object({ t: z.literal('config') }),
+  /**
+   * "Ask the network" progress. Only delivered to the thread's owner (`user`), never to the
+   * wall: `step` = a tool call, `delta` = streamed answer text, `done` = reload the thread.
+   */
+  z.object({
+    t: z.literal('chat'),
+    thread: z.number().int(),
+    user: z.string(),
+    k: z.enum(['step', 'delta', 'done']),
+    text: z.string().max(4000).optional(),
+  }),
 ]);
 export type BusEvent = z.infer<typeof busEventSchema>;
 

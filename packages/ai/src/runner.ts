@@ -20,7 +20,7 @@ import {
   type Redactor,
 } from '@mercer/core';
 
-export type AiPurpose = 'severity' | 'summary' | 'digest_daily' | 'digest_weekly' | 'test';
+export type AiPurpose = 'severity' | 'summary' | 'digest_daily' | 'digest_weekly' | 'test' | 'chat';
 export type AiCallStatus = 'ok' | 'retried' | 'fallback' | 'error' | 'refused' | 'budget_blocked';
 export type Effort = 'low' | 'medium' | 'high';
 
@@ -87,7 +87,7 @@ export type CallOutcome<T> =
     };
 
 /** Opus, Sonnet and Fable decline some requests for policy reasons; let the API reroute them. */
-const FALLBACK_BETA = 'server-side-fallback-2026-07-01';
+export const FALLBACK_BETA = 'server-side-fallback-2026-07-01';
 
 export interface AiRunnerDeps {
   cfg: AppConfig['ai'];
@@ -125,7 +125,7 @@ export function isTransient(err: unknown): boolean {
   return false;
 }
 
-function describeError(err: unknown): string {
+export function describeError(err: unknown): string {
   if (err instanceof Anthropic.APIConnectionTimeoutError) return 'timed out';
   if (err instanceof Anthropic.APIError && err.status) {
     const body = err.error as { error?: { type?: string; message?: string } } | undefined;
@@ -136,9 +136,10 @@ function describeError(err: unknown): string {
 }
 
 export class AiRunner {
-  private readonly client: Anthropic;
+  /** Shared with the chat loop (chat.ts), which logs and budgets through the same deps. */
+  readonly client: Anthropic;
 
-  constructor(private readonly d: AiRunnerDeps) {
+  constructor(readonly d: AiRunnerDeps) {
     this.client = d.client ?? createAnthropicClient(d.cfg);
   }
 

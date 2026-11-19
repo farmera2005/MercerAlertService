@@ -16,7 +16,9 @@ const LINKS = [
     label: 'Sites',
     match: (p: string) => p.startsWith('/sites') || p.startsWith('/nodes'),
   },
+  { href: '/trends', label: 'Trends', match: (p: string) => p.startsWith('/trends') },
   { href: '/digests', label: 'Digests', match: (p: string) => p.startsWith('/digests') },
+  { href: '/ask', label: 'Ask', match: (p: string) => p.startsWith('/ask') },
 ];
 
 export function NavLinks({ isAdmin }: { isAdmin: boolean }) {

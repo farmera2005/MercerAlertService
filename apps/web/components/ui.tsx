@@ -1,9 +1,9 @@
 import type {
   ButtonHTMLAttributes,
+  ComponentProps,
   InputHTMLAttributes,
   ReactNode,
   SelectHTMLAttributes,
-  TextareaHTMLAttributes,
 } from 'react';
 
 const cx = (...c: Array<string | false | null | undefined>) => c.filter(Boolean).join(' ');
@@ -74,7 +74,7 @@ export function Input({ className, ...p }: InputHTMLAttributes<HTMLInputElement>
   );
 }
 
-export function Textarea({ className, ...p }: TextareaHTMLAttributes<HTMLTextAreaElement>) {
+export function Textarea({ className, ...p }: ComponentProps<'textarea'>) {
   return (
     <textarea
       {...p}
