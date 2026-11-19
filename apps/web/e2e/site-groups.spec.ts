@@ -1,8 +1,8 @@
 import { expect, test, type Page } from '@playwright/test';
 
 /**
- * Sites from SolarWinds groups, and site notes saved to the group description. Runs last: it
- * renames sites to their group names. The mock names its site groups "Site - <name>".
+ * Sites from SolarWinds groups, found automatically, and site notes saved to the group
+ * description. The mock names its site groups "Site - <site name>". Runs last.
  */
 const admin = {
   username: process.env.E2E_ADMIN_USER ?? 'e2e-admin',
@@ -48,25 +48,22 @@ test('sites follow SolarWinds groups, and site notes are saved to the group', as
   await page.getByRole('button', { name: 'Save connection' }).click();
   await expect(page.getByRole('button', { name: 'Save connection' })).toBeEnabled();
 
-  // Sites are the groups named "Site - <name>".
+  // Nothing to set: MAS found the site groups by itself, and says why.
   await page.goto('/settings/mapping');
-  await page.fill('#f-SITE_GROUP_PATTERN', '^Site - (.+)$');
-  await page.getByRole('button', { name: 'Save mapping' }).click();
-  await expect(page.getByRole('button', { name: 'Save mapping' })).toBeEnabled();
-  // The worker re-polls groups as soon as the mapping changes.
-  await expect(async () => {
-    await page.reload();
-    const rows = page.getByTestId('site-group-rows');
-    await expect(rows.locator('tr', { hasText: 'Site - Rockford' })).toContainText('Rockford');
-    await expect(rows).not.toContainText('created at the next groups poll');
-  }).toPass({ timeout: 90_000 });
+  await expect(page.getByTestId('site-group-status')).toContainText('Found automatically');
+  const row = page.getByTestId('site-group-rows').locator('tr', {
+    hasText: 'Site - Rockford Elevator',
+  });
+  await expect(row).toContainText('Rockford Elevator');
+  await expect(row).toContainText('kinds of device');
+  await expect(page.getByTestId('site-group-rows')).not.toContainText('at the next groups poll');
 
   // The site's notes are the group description; edit them in MAS.
-  const before = await groupDescription('Site - Rockford');
+  const before = await groupDescription('Site - Rockford Elevator');
   expect(before).toBeTruthy();
   await page.goto('/settings/sites');
   const site = page.locator('details', {
-    has: page.locator('summary').getByText('Rockford', { exact: true }),
+    has: page.locator('summary').getByText('Rockford Elevator', { exact: true }),
   });
   await site.locator('summary').click();
   await expect(site.getByText('SolarWinds group', { exact: true })).toBeVisible();
@@ -78,11 +75,13 @@ test('sites follow SolarWinds groups, and site notes are saved to the group', as
   await site.getByRole('button', { name: 'Save site' }).click();
   await expect(site.getByText(/Saving the notes to SolarWinds/)).toBeVisible();
 
-  await expect.poll(() => groupDescription('Site - Rockford'), { timeout: 30_000 }).toBe(text);
+  await expect
+    .poll(() => groupDescription('Site - Rockford Elevator'), { timeout: 30_000 })
+    .toBe(text);
   await expect(async () => {
     await page.reload();
     const s = page.locator('details', {
-      has: page.locator('summary').getByText('Rockford', { exact: true }),
+      has: page.locator('summary').getByText('Rockford Elevator', { exact: true }),
     });
     await s.locator('summary').click();
     await expect(s.getByTestId('site-notes-write')).toHaveAttribute('data-status', 'ok');

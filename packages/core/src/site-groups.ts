@@ -1,9 +1,10 @@
 /**
- * Sites from SolarWinds groups. A "site group" is a group chosen by SITE_GROUP_PARENT (its direct
- * sub-groups) and/or SITE_GROUP_PATTERN (a name match). A device belongs to the site group that
- * contains it directly or through nested groups. Each site group is linked to one Site Profile
+ * Sites from SolarWinds groups. A "site group" is found automatically (detectSiteGroups: groups
+ * whose devices share a location), or chosen by SITE_GROUP_PARENT (its direct sub-groups) and/or
+ * SITE_GROUP_PATTERN (a name match). A device belongs to the site group that contains it directly
+ * or through nested groups. Each site group is linked to one Site Profile
  * (`sites.orion_container_id`): matched by name on first sight, or created, and renamed with it.
- * Pure: the worker loads the group mirror, and applies the plan these functions return.
+ * Pure: the worker loads the group mirror and device facts, and applies the plans returned here.
  */
 import { normalizeKey, slugify } from './util';
 
@@ -22,17 +23,40 @@ export interface GroupMemberRef {
 export interface SiteGroupConfig {
   parent: string | null;
   pattern: string | null;
+  /** Find site groups automatically when neither parent nor pattern is set (SITE_GROUP_AUTO). */
+  auto?: boolean;
 }
 
 export interface SiteGroup {
   containerId: number;
   groupName: string;
-  /** The pattern's first capture group, else the group name. */
+  /** The pattern's first capture group, else the group name without "Site -" and the like. */
   siteName: string;
+  /** Why it was chosen (automatic detection), for the Mapping page. */
+  reason?: string;
+}
+
+export type SiteGroupMode = 'manual' | 'auto' | 'off';
+
+export function siteGroupMode(cfg: SiteGroupConfig): SiteGroupMode {
+  if (cfg.parent?.trim() || cfg.pattern) return 'manual';
+  return cfg.auto ? 'auto' : 'off';
 }
 
 export function siteGroupsEnabled(cfg: SiteGroupConfig): boolean {
-  return !!(cfg.parent?.trim() || cfg.pattern);
+  return siteGroupMode(cfg) !== 'off';
+}
+
+/** "Site - Rockford", "LOC: Rockford", "Rockford Site" → "Rockford". */
+export function cleanGroupName(name: string): string {
+  const cleaned = name
+    .trim()
+    .replace(/^(sites?|locations?|loc|branch(es)?|facilit(y|ies))\s*[-:–—|]\s*/i, '')
+    .replace(/\s*[-:–—|]\s*(sites?|locations?)$/i, '')
+    .replace(/\s+\((sites?|locations?)\)$/i, '')
+    .replace(/\s+(site|location)$/i, '')
+    .trim();
+  return cleaned || name.trim();
 }
 
 /** The groups that are sites, sorted by site name. Empty when neither setting is set. */
@@ -59,7 +83,7 @@ export function selectSiteGroups(
   const re = cfg.pattern ? new RegExp(cfg.pattern) : null;
   const out: SiteGroup[] = [];
   for (const g of candidates) {
-    let siteName = g.name.trim();
+    let siteName = cleanGroupName(g.name);
     if (re) {
       const m = re.exec(g.name);
       if (!m) continue;
@@ -133,6 +157,8 @@ export interface SiteLinkRef {
 }
 
 export interface SiteGroupPlan {
+  /** Sites linked to a group that is no longer a site group (or gone): unlink them. */
+  unlink: Array<{ siteId: number; containerId: number }>;
   /** Existing sites matched by name, code or alias: link them to their group. */
   link: Array<{ siteId: number; containerId: number }>;
   /** Linked sites whose group's site name changed: rename, keeping the old name as an alias. */
@@ -151,7 +177,7 @@ export function planSiteGroupLinks(
   sites: readonly SiteLinkRef[],
   autoCreate: boolean,
 ): SiteGroupPlan {
-  const plan: SiteGroupPlan = { link: [], rename: [], create: [] };
+  const plan: SiteGroupPlan = { unlink: [], link: [], rename: [], create: [] };
   const byContainer = new Map<number, SiteLinkRef>();
   const unlinkedByKey = new Map<string, SiteLinkRef>();
   for (const s of sites) {
@@ -191,5 +217,357 @@ export function planSiteGroupLinks(
     usedCodes.add(code);
     plan.create.push({ containerId: g.containerId, name: g.siteName, code });
   }
+  for (const s of sites)
+    if (
+      s.orionContainerId !== null &&
+      !groupIds.has(s.orionContainerId) &&
+      !plan.link.some((l) => l.siteId === s.id)
+    )
+      plan.unlink.push({ siteId: s.id, containerId: s.orionContainerId });
   return plan;
+}
+
+// ---------------------------------------------------------------------------------------------
+// Automatic detection
+// ---------------------------------------------------------------------------------------------
+
+/** What detection knows about a device. */
+export interface NodeFacts {
+  nodeId: number;
+  caption: string | null;
+  ip: string | null;
+  role: string | null;
+  /** The Site custom property value, if any. */
+  siteValue: string | null;
+}
+
+export interface DetectContext {
+  nodes: readonly NodeFacts[];
+  /** SITE_FROM_CAPTION_REGEX: its first capture group is a hostname's site prefix. */
+  captionRegex: string | null;
+  /** Normalized names, codes and aliases of the existing sites. */
+  knownSiteKeys: ReadonlySet<string>;
+  /** Groups already linked to a site stay site groups while they exist, so placement is stable. */
+  linked: ReadonlySet<number>;
+}
+
+export interface RejectedGroup {
+  containerId: number;
+  groupName: string;
+  reason: string;
+}
+
+export interface SiteGroupChoice {
+  mode: SiteGroupMode;
+  siteGroups: SiteGroup[];
+  /** Groups automatic detection did not use, with the reason (empty in manual mode). */
+  rejected: RejectedGroup[];
+}
+
+/** Share of a group's devices that must have one location in common. */
+export const SITE_LOCALITY_MIN = 0.8;
+/** A location signal counts only if it tells devices apart network-wide. */
+const SIGNAL_MIN_VALUES = 3;
+const SIGNAL_MIN_COVERAGE = 0.5;
+/** Siblings: when this share of a parent's groups are sites, its other local groups are too. */
+const SIBLING_SHARE = 0.6;
+/** A site group mostly inside another site group is dropped. */
+const CONTAINED_SHARE = 0.8;
+
+type Signal = 'cp' | 'prefix' | 'net24' | 'net16';
+const SIGNAL_TEXT: Record<Signal, (k: string) => string> = {
+  cp: () => 'same Site property',
+  prefix: (k) => `same hostname prefix ${k.toUpperCase()}`,
+  net24: (k) => `same subnet ${k}.x`,
+  net16: (k) => `same network ${k}.x.x`,
+};
+
+/** Choose the site groups for the current settings: manual, automatic, or none. */
+export function chooseSiteGroups(
+  groups: readonly GroupRef[],
+  members: readonly GroupMemberRef[],
+  cfg: SiteGroupConfig,
+  detect: DetectContext | null,
+): SiteGroupChoice {
+  const mode = siteGroupMode(cfg);
+  if (mode === 'manual')
+    return { mode, siteGroups: selectSiteGroups(groups, members, cfg), rejected: [] };
+  if (mode === 'off' || !detect) return { mode, siteGroups: [], rejected: [] };
+  return { mode, ...detectSiteGroups(groups, members, detect) };
+}
+
+/**
+ * Find the groups that are sites. A group looks like a site when most of its devices share a
+ * location (Site property, hostname prefix or subnet, whichever tells sites apart) and it holds
+ * several kinds of device or is named after a known site. "All FortiGates" fails the first test
+ * (spread over every site) or the second (one kind of device). Then: a group inside another site
+ * group is dropped, unless the outer group is really several site groups (a city or region); a
+ * group mostly inside another is dropped; and a small local group joins its sibling groups when
+ * most of them are sites. Groups already linked to a site stay sites.
+ */
+export function detectSiteGroups(
+  groups: readonly GroupRef[],
+  members: readonly GroupMemberRef[],
+  ctx: DetectContext,
+): { siteGroups: SiteGroup[]; rejected: RejectedGroup[] } {
+  const byId = new Map(groups.map((g) => [g.containerId, g]));
+  const children = new Map<number, number[]>();
+  const directNodes = new Map<number, number[]>();
+  const parents = new Map<number, number[]>();
+  for (const m of members) {
+    if (!byId.has(m.containerId)) continue;
+    if (m.nodeId !== null) {
+      const l = directNodes.get(m.containerId) ?? [];
+      l.push(m.nodeId);
+      directNodes.set(m.containerId, l);
+    } else if (m.memberContainerId !== null && byId.has(m.memberContainerId)) {
+      const l = children.get(m.containerId) ?? [];
+      l.push(m.memberContainerId);
+      children.set(m.containerId, l);
+      const p = parents.get(m.memberContainerId) ?? [];
+      p.push(m.containerId);
+      parents.set(m.memberContainerId, p);
+    }
+  }
+  const nodesOf = new Map<number, Set<number>>();
+  const collect = (cid: number): Set<number> => {
+    const done = nodesOf.get(cid);
+    if (done) return done;
+    const out = new Set<number>();
+    const seen = new Set<number>([cid]);
+    const stack = [cid];
+    while (stack.length) {
+      const c = stack.pop()!;
+      for (const n of directNodes.get(c) ?? []) out.add(n);
+      for (const ch of children.get(c) ?? [])
+        if (!seen.has(ch)) {
+          seen.add(ch);
+          stack.push(ch);
+        }
+    }
+    nodesOf.set(cid, out);
+    return out;
+  };
+  for (const g of groups) collect(g.containerId);
+
+  // Location keys per node, keeping only signals that tell devices apart network-wide.
+  const captionRe = ctx.captionRegex ? new RegExp(ctx.captionRegex) : null;
+  const keysOf = new Map<number, Partial<Record<Signal, string>>>();
+  for (const n of ctx.nodes) {
+    const k: Partial<Record<Signal, string>> = {};
+    const cp = n.siteValue ? normalizeKey(n.siteValue) : '';
+    if (cp) k.cp = cp;
+    const prefix = captionRe && n.caption ? captionRe.exec(n.caption)?.[1] : undefined;
+    if (prefix && normalizeKey(prefix)) k.prefix = normalizeKey(prefix);
+    const ip = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.\d{1,3}$/.exec(n.ip ?? '');
+    if (ip) {
+      k.net24 = `${ip[1]}.${ip[2]}.${ip[3]}`;
+      k.net16 = `${ip[1]}.${ip[2]}`;
+    }
+    keysOf.set(n.nodeId, k);
+  }
+  const signals = (['cp', 'prefix', 'net24', 'net16'] as const).filter((sig) => {
+    const values = [...keysOf.values()].map((k) => k[sig]).filter((v): v is string => !!v);
+    return (
+      values.length >= SIGNAL_MIN_COVERAGE * Math.max(1, ctx.nodes.length) &&
+      new Set(values).size >= SIGNAL_MIN_VALUES
+    );
+  });
+  const roleOf = new Map(ctx.nodes.map((n) => [n.nodeId, n.role]));
+
+  interface Stats {
+    size: number;
+    locality: number;
+    signal: Signal | null;
+    key: string | null;
+    roles: number;
+    nameMatch: boolean;
+    siteName: string;
+  }
+  const stats = new Map<number, Stats>();
+  for (const g of groups) {
+    const nodes = [...nodesOf.get(g.containerId)!].filter((n) => keysOf.has(n));
+    let locality = 0;
+    let signal: Signal | null = null;
+    let key: string | null = null;
+    for (const sig of signals) {
+      const counts = new Map<string, number>();
+      let present = 0;
+      for (const n of nodes) {
+        const v = keysOf.get(n)![sig];
+        if (!v) continue;
+        present++;
+        counts.set(v, (counts.get(v) ?? 0) + 1);
+      }
+      if (!present || present < 0.5 * nodes.length) continue;
+      const [topKey, top] = [...counts].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))[0]!;
+      const share = top / present;
+      if (share > locality) [locality, signal, key] = [share, sig, topKey];
+    }
+    const roles = new Set(
+      nodes.map((n) => roleOf.get(n)).filter((r): r is string => !!r && r !== 'other'),
+    ).size;
+    const siteName = cleanGroupName(g.name);
+    const nameKey = normalizeKey(siteName);
+    const cpKey = signal === 'cp' ? key : null;
+    const prefixKey = signal === 'prefix' ? key : null;
+    const nameMatch =
+      !!nameKey &&
+      (ctx.knownSiteKeys.has(nameKey) ||
+        (!!cpKey && (nameKey === cpKey || nameKey.includes(cpKey) || cpKey.includes(nameKey))) ||
+        (!!prefixKey && prefixKey.length >= 3 && nameKey.startsWith(prefixKey)));
+    stats.set(g.containerId, {
+      size: nodes.length,
+      locality,
+      signal,
+      key,
+      roles,
+      nameMatch,
+      siteName,
+    });
+  }
+
+  const reasonFor = (st: Stats): string => {
+    const parts: string[] = [];
+    if (st.signal && st.key) parts.push(SIGNAL_TEXT[st.signal](st.key));
+    if (st.roles >= 2) parts.push(`${st.roles} kinds of device`);
+    if (st.nameMatch) parts.push('named after a site');
+    return parts.join(', ');
+  };
+  const rejected = new Map<number, string>();
+  const accepted = new Set<number>();
+  /** Linked groups kept only because they are linked: why they would not qualify today. */
+  const keptLinked = new Map<number, string>();
+  for (const g of groups) {
+    const st = stats.get(g.containerId)!;
+    const local = st.locality >= SITE_LOCALITY_MIN;
+    if (st.size === 0) rejected.set(g.containerId, 'no monitored devices');
+    else if (!local && !signals.length && ctx.knownSiteKeys.has(normalizeKey(st.siteName)))
+      // Nothing to compare locations with: a group named exactly after a site is still one.
+      accepted.add(g.containerId);
+    else if (!local)
+      rejected.set(
+        g.containerId,
+        signals.length ? 'devices are at several locations' : 'no location information to compare',
+      );
+    else if (st.roles >= 2 || st.nameMatch) accepted.add(g.containerId);
+    else rejected.set(g.containerId, 'one kind of device, and not named after a site');
+    // A linked group stays a site while it has devices, so placement doesn't flap.
+    if (ctx.linked.has(g.containerId) && st.size > 0 && !accepted.has(g.containerId)) {
+      keptLinked.set(g.containerId, rejected.get(g.containerId) ?? '');
+      rejected.delete(g.containerId);
+      accepted.add(g.containerId);
+    }
+  }
+
+  // Nesting: keep the outermost site group, unless it is several site groups (a city or region).
+  const nearestAccepted = (cid: number): number[] => {
+    const out: number[] = [];
+    const seen = new Set<number>([cid]);
+    const stack = [...(children.get(cid) ?? [])];
+    while (stack.length) {
+      const c = stack.pop()!;
+      if (seen.has(c)) continue;
+      seen.add(c);
+      if (accepted.has(c)) out.push(c);
+      else stack.push(...(children.get(c) ?? []));
+    }
+    return out;
+  };
+  const hasAcceptedAncestor = (cid: number): boolean => {
+    const seen = new Set<number>([cid]);
+    const stack = [...(parents.get(cid) ?? [])];
+    while (stack.length) {
+      const p = stack.pop()!;
+      if (seen.has(p)) continue;
+      seen.add(p);
+      if (accepted.has(p)) return true;
+      stack.push(...(parents.get(p) ?? []));
+    }
+    return false;
+  };
+  const chosen = new Set<number>();
+  const resolve = (cid: number, trail: Set<number>) => {
+    if (trail.has(cid)) return;
+    trail.add(cid);
+    const inner = nearestAccepted(cid);
+    const covered = new Set(inner.flatMap((c) => [...nodesOf.get(c)!]));
+    if (inner.length >= 2 && covered.size >= CONTAINED_SHARE * nodesOf.get(cid)!.size) {
+      rejected.set(cid, 'contains several site groups');
+      for (const c of inner) resolve(c, trail);
+    } else {
+      chosen.add(cid);
+      for (const c of inner) rejected.set(c, `inside the site group “${byId.get(cid)!.name}”`);
+    }
+  };
+  for (const cid of accepted) if (!hasAcceptedAncestor(cid)) resolve(cid, new Set());
+
+  // Overlap: a site group mostly inside a bigger one is the same place.
+  const ordered = [...chosen].sort((a, b) => nodesOf.get(b)!.size - nodesOf.get(a)!.size || a - b);
+  for (let i = 0; i < ordered.length; i++) {
+    const small = ordered[i]!;
+    if (!chosen.has(small)) continue;
+    for (let j = 0; j < i; j++) {
+      const big = ordered[j]!;
+      if (!chosen.has(big) || ctx.linked.has(small)) continue;
+      const sn = nodesOf.get(small)!;
+      const bn = nodesOf.get(big)!;
+      let shared = 0;
+      for (const n of sn) if (bn.has(n)) shared++;
+      if (sn.size && shared >= CONTAINED_SHARE * sn.size) {
+        chosen.delete(small);
+        rejected.set(small, `mostly the same devices as “${byId.get(big)!.name}”`);
+        break;
+      }
+    }
+  }
+
+  // Siblings: small local groups next to site groups are sites too.
+  const bySibling = new Set<number>();
+  const siblingSets = new Map<number, number[]>(); // parent id (0 = top level) → children
+  for (const g of groups) {
+    for (const p of parents.get(g.containerId) ?? [0]) {
+      const l = siblingSets.get(p) ?? [];
+      l.push(g.containerId);
+      siblingSets.set(p, l);
+    }
+  }
+  for (const sibs of siblingSets.values()) {
+    // Only local groups with devices of their own count: "All FortiGates" says nothing about the
+    // site groups next to it, and "Celina HQ Servers" is part of a site.
+    const sites = sibs.filter((c) => chosen.has(c));
+    const taken = new Set(sites.flatMap((c) => [...nodesOf.get(c)!]));
+    const candidates = sibs.filter(
+      (c) =>
+        !chosen.has(c) &&
+        !accepted.has(c) &&
+        stats.get(c)!.size > 0 &&
+        stats.get(c)!.locality >= SITE_LOCALITY_MIN &&
+        ![...nodesOf.get(c)!].some((n) => taken.has(n)),
+    );
+    if (sites.length < 2 || sites.length < SIBLING_SHARE * (sites.length + candidates.length))
+      continue;
+    for (const c of candidates) {
+      chosen.add(c);
+      rejected.delete(c);
+      bySibling.add(c);
+    }
+  }
+
+  const siteGroups: SiteGroup[] = [...chosen].map((cid) => {
+    const g = byId.get(cid)!;
+    const st = stats.get(cid)!;
+    const why = keptLinked.has(cid)
+      ? `kept because it is linked to a site (on its own: ${keptLinked.get(cid)})`
+      : bySibling.has(cid)
+        ? `${reasonFor(st) || 'local devices'}, like the groups next to it`
+        : reasonFor(st);
+    return { containerId: cid, groupName: g.name, siteName: st.siteName, reason: why };
+  });
+  siteGroups.sort((a, b) => a.siteName.localeCompare(b.siteName) || a.containerId - b.containerId);
+  const rejectedList = [...rejected]
+    .filter(([cid]) => !chosen.has(cid))
+    .map(([cid, reason]) => ({ containerId: cid, groupName: byId.get(cid)!.name, reason }))
+    .sort((a, b) => a.groupName.localeCompare(b.groupName));
+  return { siteGroups, rejected: rejectedList };
 }

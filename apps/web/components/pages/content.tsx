@@ -1,9 +1,11 @@
 import 'server-only';
 import {
+  chooseSiteGroups,
   INTERNAL_SETTING_KEYS,
   nodeSiteGroups,
   normalizeKey,
-  selectSiteGroups,
+  siteGroupMode,
+  type MappingConfig,
 } from '@mercer/core';
 import {
   getInternalSetting,
@@ -11,7 +13,9 @@ import {
   listDivisions,
   listSites,
   loadGroupMirror,
+  loadNodeFacts,
   siteGroupInfo,
+  siteKeysAndLinks,
 } from '@mercer/db';
 import type { DiscoveryReport } from '@mercer/swis/setup-contract';
 import { MappingPanel, type SiteGroupPreview } from '@/components/mapping-panel';
@@ -67,31 +71,53 @@ function siteKeys(sites: Awaited<ReturnType<typeof listSites>>) {
   return out;
 }
 
-/** Which SolarWinds groups the saved settings treat as sites, with their MAS site. */
+/** Which SolarWinds groups the saved settings treat as sites (and why), with their MAS site. */
 async function siteGroupPreview(
-  mapping: { siteGroupParent: string | null; siteGroupPattern: string | null } | undefined,
-  sites: Array<{ name: string; orionContainerId: number | null }>,
+  mapping: MappingConfig | undefined,
+  sites: Array<{
+    id: number;
+    code: string;
+    name: string;
+    aliases: string[];
+    orionContainerId: number | null;
+  }>,
 ): Promise<SiteGroupPreview> {
-  const { groups, members } = await loadGroupMirror(server().db.db);
+  const db = server().db.db;
+  const { groups, members } = await loadGroupMirror(db);
   const cfg = {
     parent: mapping?.siteGroupParent ?? null,
     pattern: mapping?.siteGroupPattern ?? null,
+    auto: mapping?.siteGroupAuto ?? true,
   };
-  const selected = selectSiteGroups(groups, members, cfg);
-  const { byNode } = nodeSiteGroups(selected, members);
+  const mode = siteGroupMode(cfg);
+  const { keys, linked } = siteKeysAndLinks(sites);
+  const detect =
+    mode === 'auto'
+      ? {
+          nodes: await loadNodeFacts(db, mapping?.siteField ?? 'Site'),
+          captionRegex: mapping?.siteFromCaptionRegex ?? null,
+          knownSiteKeys: keys,
+          linked,
+        }
+      : null;
+  const choice = chooseSiteGroups(groups, members, cfg, detect);
+  const { byNode } = nodeSiteGroups(choice.siteGroups, members);
   const devices = new Map<number, number>();
   for (const cid of byNode.values()) devices.set(cid, (devices.get(cid) ?? 0) + 1);
-  const linked = new Map(
+  const linkedName = new Map(
     sites.filter((s) => s.orionContainerId !== null).map((s) => [s.orionContainerId!, s.name]),
   );
   return {
+    mode,
     groupsPolled: groups.length,
-    rows: selected.map((g) => ({
+    rows: choice.siteGroups.map((g) => ({
       groupName: g.groupName,
       siteName: g.siteName,
       devices: devices.get(g.containerId) ?? 0,
-      linkedSite: linked.get(g.containerId) ?? null,
+      linkedSite: linkedName.get(g.containerId) ?? null,
+      reason: g.reason ?? null,
     })),
+    rejected: choice.rejected.map((r) => ({ groupName: r.groupName, reason: r.reason })),
   };
 }
 

@@ -19,6 +19,17 @@ export interface MockSite {
   dependencies: boolean;
 }
 
+/** SolarWinds group names where they differ from the Site property (the full site names). */
+const SITE_GROUP_NAMES: Record<string, string> = {
+  ROCK: 'Rockford Elevator',
+  FTR: 'Fort Recovery Elevator',
+  STH: 'St. Henry Elevator',
+  MEN: 'Mendon Elevator',
+  OHC: 'Ohio City Agronomy',
+  VWRT: 'Van Wert Agronomy Center',
+  WAPA: 'Wapakoneta Energy',
+};
+
 export const MOCK_SITES: MockSite[] = [
   {
     prefix: 'CEL',
@@ -477,9 +488,9 @@ export function buildWorld(now = new Date()): World {
       });
     });
 
-    // Group per site; dependency FW → group where configured.
+    // Group per site, named after the site as an admin would; dependency FW → group where configured.
     const cid = containerId++;
-    const siteName = site.cpSite || site.city || site.prefix;
+    const siteName = SITE_GROUP_NAMES[site.prefix] ?? (site.cpSite || site.city || site.prefix);
     w.groups.push({
       ContainerID: cid,
       Name: `Site - ${siteName}`,

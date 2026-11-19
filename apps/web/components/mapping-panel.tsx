@@ -70,9 +70,32 @@ function CpSelect({
 }
 
 export interface SiteGroupPreview {
+  mode: 'manual' | 'auto' | 'off';
   /** Groups in the last groups poll (0 = not polled yet). */
   groupsPolled: number;
-  rows: Array<{ groupName: string; siteName: string; devices: number; linkedSite: string | null }>;
+  rows: Array<{
+    groupName: string;
+    siteName: string;
+    devices: number;
+    linkedSite: string | null;
+    /** Why automatic detection chose it. */
+    reason: string | null;
+  }>;
+  /** Groups automatic detection did not use, and why. */
+  rejected: Array<{ groupName: string; reason: string }>;
+}
+
+function siteGroupStatus(p: SiteGroupPreview): string {
+  if (p.groupsPolled === 0)
+    return 'No groups read from SolarWinds yet. Groups are read every few minutes once monitoring has started.';
+  if (p.mode === 'off') return `Not used. ${p.groupsPolled} groups found in SolarWinds.`;
+  if (p.mode === 'manual')
+    return p.rows.length
+      ? `Chosen by the group name or pattern below: ${p.rows.length} of ${p.groupsPolled} groups are sites.`
+      : `None of the ${p.groupsPolled} groups match the group name or pattern below.`;
+  return p.rows.length
+    ? `Found automatically: ${p.rows.length} of ${p.groupsPolled} groups are sites.`
+    : `None of the ${p.groupsPolled} groups look like sites, so devices are placed by custom property.`;
 }
 
 export function MappingPanel({
@@ -184,50 +207,74 @@ export function MappingPanel({
           title="Sites from SolarWinds groups"
           description="If each site is a group in SolarWinds, MAS keeps one site per group: same name, and the group description as the site notes. Devices go to the site whose group contains them; the custom properties below are the fallback."
         >
-          <div className="grid gap-5 sm:grid-cols-2" data-testid="site-groups">
-            {f.SITE_GROUP_PARENT && (
-              <SettingField
-                field={f.SITE_GROUP_PARENT}
-                error={saveState.errors?.SITE_GROUP_PARENT}
-              />
-            )}
-            {f.SITE_GROUP_PATTERN && (
-              <SettingField
-                field={f.SITE_GROUP_PATTERN}
-                error={saveState.errors?.SITE_GROUP_PATTERN}
-              />
-            )}
+          <div className="space-y-4" data-testid="site-groups">
+            {f.SITE_GROUP_AUTO && <SettingField field={f.SITE_GROUP_AUTO} />}
+            <p className="text-sm text-slate-300" data-testid="site-group-status">
+              {siteGroupStatus(siteGroups)}
+            </p>
           </div>
-          {siteGroups.rows.length > 0 ? (
-            <table className="mt-6 w-full text-left text-sm" data-testid="site-group-rows">
+          {siteGroups.rows.length > 0 && (
+            <table className="mt-4 w-full text-left text-sm" data-testid="site-group-rows">
               <thead className="text-xs text-slate-400">
                 <tr>
-                  <th className="py-1">SolarWinds group</th>
-                  <th>Devices</th>
-                  <th>Site in MAS</th>
+                  <th className="py-1 pr-4">SolarWinds group</th>
+                  <th className="py-1 pr-4 text-right">Devices</th>
+                  <th className="py-1 pr-4">Site in MAS</th>
+                  {siteGroups.mode === 'auto' && <th className="py-1">Why it is a site</th>}
                 </tr>
               </thead>
               <tbody>
                 {siteGroups.rows.map((r) => (
-                  <tr key={r.groupName} className="border-t border-white/5">
-                    <td className="py-1.5">{r.groupName}</td>
-                    <td className="tabular-nums">{r.devices}</td>
-                    <td className={r.linkedSite ? '' : 'text-amber-300'}>
-                      {r.linkedSite ?? `“${r.siteName}” is created at the next groups poll`}
+                  <tr key={r.groupName} className="border-t border-white/5 align-top">
+                    <td className="py-1.5 pr-4">{r.groupName}</td>
+                    <td className="py-1.5 pr-4 text-right tabular-nums">{r.devices}</td>
+                    <td className={`py-1.5 pr-4 ${r.linkedSite ? '' : 'text-amber-300'}`}>
+                      {r.linkedSite ?? `“${r.siteName}”, at the next groups poll`}
                     </td>
+                    {siteGroups.mode === 'auto' && (
+                      <td className="py-1.5 text-xs leading-5 text-slate-400">{r.reason}</td>
+                    )}
                   </tr>
                 ))}
               </tbody>
             </table>
-          ) : (
-            <p className="mt-4 text-sm text-slate-400">
-              {siteGroups.groupsPolled === 0
-                ? 'No groups read from SolarWinds yet. The groups poll runs every few minutes once monitoring has started.'
-                : (f.SITE_GROUP_PARENT?.value ?? '') || (f.SITE_GROUP_PATTERN?.value ?? '')
-                  ? `None of the ${siteGroups.groupsPolled} SolarWinds groups match. Check the group name or pattern.`
-                  : `Not used: ${siteGroups.groupsPolled} groups found in SolarWinds. Set the parent group or a name pattern to use them as sites.`}
-            </p>
           )}
+          {siteGroups.mode === 'auto' && siteGroups.rejected.length > 0 && (
+            <details className="mt-4 text-sm" data-testid="site-group-rejected">
+              <summary className="cursor-pointer text-slate-300">
+                Groups that are not sites ({siteGroups.rejected.length})
+              </summary>
+              <ul className="mt-2 space-y-1">
+                {siteGroups.rejected.map((r) => (
+                  <li key={r.groupName}>
+                    {r.groupName} <span className="text-xs text-slate-400">— {r.reason}</span>
+                  </li>
+                ))}
+              </ul>
+            </details>
+          )}
+          <details
+            className="mt-4 rounded-lg border border-white/10 p-4"
+            open={!!(f.SITE_GROUP_PARENT?.value || f.SITE_GROUP_PATTERN?.value)}
+          >
+            <summary className="cursor-pointer text-sm font-medium text-slate-300">
+              Choose the groups yourself
+            </summary>
+            <div className="mt-4 grid gap-5 sm:grid-cols-2">
+              {f.SITE_GROUP_PARENT && (
+                <SettingField
+                  field={f.SITE_GROUP_PARENT}
+                  error={saveState.errors?.SITE_GROUP_PARENT}
+                />
+              )}
+              {f.SITE_GROUP_PATTERN && (
+                <SettingField
+                  field={f.SITE_GROUP_PATTERN}
+                  error={saveState.errors?.SITE_GROUP_PATTERN}
+                />
+              )}
+            </div>
+          </details>
         </Card>
 
         <Card

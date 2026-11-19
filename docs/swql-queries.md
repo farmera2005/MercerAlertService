@@ -128,7 +128,7 @@ A status change produces an `interface status` transition. Each poll also folds 
 
 Q4, Q5 and Q8 run hourly (`SWIS_POLL_TOPOLOGY_SEC`) and at startup. Q6 and Q7 (groups) have
 their own poller, every 300 s (`SWIS_POLL_GROUPS_SEC`). Sites can correspond to SolarWinds
-groups (`SITE_GROUP_PARENT` / `SITE_GROUP_PATTERN`), with the group description as the site
+groups (found automatically, or by `SITE_GROUP_PARENT` / `SITE_GROUP_PATTERN`), with the group description as the site
 notes, so membership and notes need to be fresh. Each of these is a full replace inside a
 single transaction; groups and members are replaced together, and a 400/403 on either keeps
 the previous mirror.

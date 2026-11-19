@@ -1,12 +1,17 @@
 import { describe, expect, it } from 'vitest';
 import { buildSiteResolutionContext, resolveNodeSite } from './mapping';
 import {
+  chooseSiteGroups,
+  cleanGroupName,
+  detectSiteGroups,
   nodeSiteGroups,
   planSiteGroupLinks,
   selectSiteGroups,
   siteGroupsEnabled,
+  type DetectContext,
   type GroupMemberRef,
   type GroupRef,
+  type NodeFacts,
 } from './site-groups';
 
 const groups: GroupRef[] = [
@@ -188,5 +193,168 @@ describe('resolveNodeSite with site groups', () => {
         ctx,
       ),
     ).toMatchObject({ siteId: 2, source: 'custom_property' });
+  });
+});
+
+describe('detectSiteGroups (automatic)', () => {
+  // Rockford (ROCK, 10.21.0.x), Celina HQ (CEL, 10.10.0.x), Celina Feed Mill (CFM, 10.11.0.x),
+  // Coldwater (COLD, 10.22.0.x), and a one-device site, Spencerville (SPV, 10.30.0.x).
+  const n = (
+    nodeId: number,
+    caption: string,
+    ip: string,
+    role: string,
+    siteValue: string | null = null,
+  ): NodeFacts => ({ nodeId, caption, ip, role, siteValue });
+  const nodes: NodeFacts[] = [
+    n(1, 'ROCK-FW01', '10.21.0.1', 'firewall'),
+    n(2, 'ROCK-SW01', '10.21.0.2', 'switch'),
+    n(3, 'ROCK-AP01', '10.21.0.5', 'access_point'),
+    n(4, 'ROCK-SCALE01', '10.21.0.3', 'scale_system'),
+    n(10, 'CEL-FW01', '10.10.0.1', 'firewall'),
+    n(11, 'CEL-SW01', '10.10.0.2', 'core_switch'),
+    n(12, 'CEL-SRV01', '10.10.0.20', 'server'),
+    n(13, 'CEL-SRV02', '10.10.0.21', 'server'),
+    n(15, 'CFM-FW01', '10.11.0.1', 'firewall'),
+    n(16, 'CFM-SW01', '10.11.0.2', 'switch'),
+    n(20, 'COLD-FW01', '10.22.0.1', 'firewall'),
+    n(21, 'COLD-SW01', '10.22.0.2', 'switch'),
+    n(30, 'SPV-FW01', '10.30.0.1', 'firewall'),
+  ];
+  const g = (containerId: number, name: string): GroupRef => ({ containerId, name });
+  const autoGroups: GroupRef[] = [
+    g(101, 'Rockford Elevator'),
+    g(102, 'Celina HQ'),
+    g(103, 'Coldwater'),
+    g(104, 'Spencerville'),
+    g(105, 'All FortiGates'),
+    g(106, 'Celina HQ Servers'),
+    g(107, 'Rockford Scales'),
+    g(108, 'Grain Division'),
+    g(109, 'Empty group'),
+    g(110, 'Celina Feed Mill'),
+  ];
+  const autoMembers: GroupMemberRef[] = [
+    ...[1, 2, 3].map((id) => node(101, id)),
+    sub(101, 107),
+    node(107, 4),
+    ...[10, 11, 12, 13].map((id) => node(102, id)),
+    ...[20, 21].map((id) => node(103, id)),
+    node(104, 30),
+    ...[1, 10, 15, 20, 30].map((id) => node(105, id)),
+    ...[12, 13].map((id) => node(106, id)),
+    sub(108, 101),
+    sub(108, 103),
+    ...[15, 16].map((id) => node(110, id)),
+  ];
+  const ctx = (over: Partial<DetectContext> = {}): DetectContext => ({
+    nodes,
+    captionRegex: '^([A-Za-z]{3,5})[-_]',
+    knownSiteKeys: new Set(['rockfordelevator', 'celinahq']),
+    linked: new Set(),
+    ...over,
+  });
+
+  it('finds the site groups and says why the others are not', () => {
+    const r = detectSiteGroups(autoGroups, autoMembers, ctx());
+    expect(r.siteGroups.map((s) => s.groupName)).toEqual([
+      'Celina Feed Mill',
+      'Celina HQ',
+      'Coldwater',
+      'Rockford Elevator',
+      'Spencerville',
+    ]);
+    const why = Object.fromEntries(r.rejected.map((x) => [x.groupName, x.reason]));
+    expect(why).toEqual({
+      'All FortiGates': 'devices are at several locations',
+      'Celina HQ Servers': 'mostly the same devices as “Celina HQ”',
+      'Empty group': 'no monitored devices',
+      'Grain Division': 'devices are at several locations',
+      'Rockford Scales': 'inside the site group “Rockford Elevator”',
+    });
+    const rock = r.siteGroups.find((s) => s.groupName === 'Rockford Elevator')!;
+    expect(rock.reason).toBe('same hostname prefix ROCK, 4 kinds of device, named after a site');
+    // One device, one kind, unknown name: a site because its neighbours are.
+    expect(r.siteGroups.find((s) => s.groupName === 'Spencerville')!.reason).toMatch(
+      /like the groups next to it$/,
+    );
+  });
+
+  it('prefers the sites inside a city group over the city group itself', () => {
+    const groups = [...autoGroups, g(120, 'Celina')];
+    const members = [...autoMembers, sub(120, 102), sub(120, 110)];
+    // Only the Site property tells Celina HQ and the feed mill apart here.
+    const facts = nodes.map((x) => ({
+      ...x,
+      caption: x.caption!.replace(/^CFM/, 'CEL'),
+      ip: x.ip!.replace(/^10\.11\./, '10.10.'),
+      siteValue: [15, 16].includes(x.nodeId)
+        ? 'Celina Feed Mill'
+        : x.caption!.startsWith('CEL')
+          ? 'Celina HQ'
+          : x.caption!.split('-')[0]!,
+    }));
+    const r = detectSiteGroups(groups, members, ctx({ nodes: facts }));
+    expect(r.rejected.find((x) => x.groupName === 'Celina')?.reason).toBe(
+      'contains several site groups',
+    );
+    expect(r.siteGroups.map((s) => s.groupName)).toContain('Celina Feed Mill');
+  });
+
+  it('keeps a linked group, cleans up names, and uses nothing without location data', () => {
+    const r = detectSiteGroups(autoGroups, autoMembers, ctx({ linked: new Set([105]) }));
+    expect(r.siteGroups.find((s) => s.containerId === 105)?.reason).toBe(
+      'kept because it is linked to a site (on its own: devices are at several locations)',
+    );
+    // A linked group that qualifies anyway shows its own reason.
+    const linkedRock = detectSiteGroups(autoGroups, autoMembers, ctx({ linked: new Set([101]) }));
+    expect(linkedRock.siteGroups.find((s) => s.containerId === 101)?.reason).toMatch(
+      /^same hostname prefix ROCK/,
+    );
+    expect(cleanGroupName('Site - Rockford')).toBe('Rockford');
+    expect(cleanGroupName('LOC: Celina HQ')).toBe('Celina HQ');
+    expect(cleanGroupName('Coldwater Site')).toBe('Coldwater');
+    expect(cleanGroupName('Site')).toBe('Site');
+    const blind = nodes.map((x) => ({ ...x, caption: null, ip: null }));
+    const none = detectSiteGroups(autoGroups, autoMembers, ctx({ nodes: blind }));
+    expect(none.siteGroups.map((s) => s.groupName)).toEqual(['Celina HQ', 'Rockford Elevator']);
+    expect(none.rejected.find((x) => x.groupName === 'Coldwater')?.reason).toBe(
+      'no location information to compare',
+    );
+  });
+
+  it('chooses by mode: manual settings win, off uses nothing', () => {
+    const c = ctx();
+    expect(chooseSiteGroups(autoGroups, autoMembers, { parent: null, pattern: null }, c).mode).toBe(
+      'off',
+    );
+    const manual = chooseSiteGroups(
+      autoGroups,
+      autoMembers,
+      { parent: null, pattern: '^Cold', auto: true },
+      c,
+    );
+    expect(manual.mode).toBe('manual');
+    expect(manual.siteGroups.map((s) => s.groupName)).toEqual(['Coldwater']);
+    const auto = chooseSiteGroups(
+      autoGroups,
+      autoMembers,
+      { parent: null, pattern: null, auto: true },
+      c,
+    );
+    expect(auto.mode).toBe('auto');
+    expect(auto.siteGroups).toHaveLength(5);
+  });
+
+  it('unlinks sites whose group is no longer a site group', () => {
+    const plan = planSiteGroupLinks(
+      [{ containerId: 6, groupName: 'Site - Coldwater', siteName: 'Coldwater' }],
+      [
+        { id: 1, code: 'cw', name: 'Coldwater', aliases: [], orionContainerId: 6 },
+        { id: 2, code: 'x', name: 'Gone', aliases: [], orionContainerId: 77 },
+      ],
+      true,
+    );
+    expect(plan.unlink).toEqual([{ siteId: 2, containerId: 77 }]);
   });
 });

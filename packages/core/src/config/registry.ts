@@ -244,19 +244,28 @@ export const SETTINGS: readonly SettingDef[] = [
 
   // mapping
   s({
+    key: 'SITE_GROUP_AUTO',
+    section: 'mapping',
+    label: 'Find the site groups in SolarWinds automatically',
+    kind: 'bool',
+    help: 'MAS treats a group as a site when most of its devices share a location (Site property, hostname prefix or subnet) and it holds several kinds of device or is named after a site. The list below shows what it found and why. Each site keeps the group name, and the group description is its notes.',
+  }),
+  s({
     key: 'SITE_GROUP_PARENT',
     section: 'mapping',
-    label: 'Sites are the sub-groups of this SolarWinds group',
+    label: 'Or: sites are the sub-groups of this group',
     kind: 'text',
     placeholder: 'e.g. Locations',
-    help: 'Exact group name. Each group inside it is one site, and a device belongs to the site whose group (or a group nested in it) contains it. Group descriptions are the site notes. Leave empty to use only the name pattern below, or neither to place devices by custom property.',
+    advanced: true,
+    help: 'Only if automatic detection picks the wrong groups. Exact group name; each group inside it is one site. Setting this or the pattern below replaces automatic detection.',
   }),
   s({
     key: 'SITE_GROUP_PATTERN',
     section: 'mapping',
-    label: 'Site group names (regex)',
+    label: 'Or: site group names (regex)',
     kind: 'regex',
     placeholder: '^Site - (.+)$',
+    advanced: true,
     help: 'Groups whose names match are sites (inside the group above, if set). The first capture group, if any, is the site name: "Site - Rockford" → Rockford.',
   }),
   s({ key: 'CP_SITE_FIELD', section: 'mapping', label: 'Site custom property', kind: 'text' }),

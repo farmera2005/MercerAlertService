@@ -18,6 +18,7 @@ describe('loadConfig', () => {
     });
     expect(cfg.mapping.siteGroupParent).toBeNull();
     expect(cfg.mapping.siteGroupPattern).toBeNull();
+    expect(cfg.mapping.siteGroupAuto).toBe(true);
     expect(cfg.swis.insecureSkipVerify).toBe(false);
     expect(cfg.retention.rawDays).toBe(90);
     expect(cfg.timezone).toBe('America/New_York');

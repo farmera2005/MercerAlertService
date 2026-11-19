@@ -9,6 +9,7 @@ import { createDb, requestSiteNotesWrite, seedReferenceData, type DbHandle } fro
 import { runMigrations } from '@mercer/db/migrate';
 import { startMockSwis, type MockSwis } from '@mercer/mock-swis';
 import { createWorker, type Worker } from './worker';
+import { SiteResolver } from './site-resolver';
 import { runWritebackSiteNotes } from './writeback';
 
 const url = process.env.DATABASE_URL_TEST;
@@ -59,8 +60,7 @@ describe.skipIf(!url)('sites from SolarWinds groups (integration)', () => {
       SWIS_MAX_RETRIES: '0',
       LOG_LEVEL: 'silent',
       MAS_MASTER_KEY: generateMasterKey(),
-      // The mock names its site groups "Site - <name>".
-      SITE_GROUP_PATTERN: '^Site - (.+)$',
+      // No site-group settings: the groups are found automatically (the default).
     };
     worker = createWorker(loadConfig(env), { scheduling: false, log: silent, env });
     await worker.start();
@@ -74,12 +74,22 @@ describe.skipIf(!url)('sites from SolarWinds groups (integration)', () => {
     await h?.close();
   });
 
-  it('keeps one site per site group and places its devices by membership', async () => {
+  it('finds the site groups by itself, keeps one site per group and places devices by it', async () => {
     const groups = mock.world.groups;
     const sites = await q<{ id: number; name: string; orion_container_id: number }>(
       'select id, name, orion_container_id from sites where orion_container_id is not null',
     );
     expect(sites).toHaveLength(groups.length);
+    // The groups are named after the seeded sites, so they are linked, not renamed; the one
+    // unknown site (Spencerville) is created.
+    const renames = await q<{ n: number }>(
+      `select count(*)::int as n from audit_log where action = 'site.group_rename'`,
+    );
+    expect(renames[0]!.n).toBe(0);
+    const created = await q<{ name: string }>(
+      `select after->>'name' as name from audit_log where action = 'site.auto_create'`,
+    );
+    expect(created.map((c) => c.name)).toEqual(['Spencerville']);
     for (const g of groups) {
       const site = sites.find((s) => s.orion_container_id === Number(g.ContainerID));
       expect(site?.name).toBe(String(g.Name).replace(/^Site - /, ''));
@@ -208,5 +218,42 @@ describe.skipIf(!url)('sites from SolarWinds groups (integration)', () => {
     expect(
       await requestSiteNotesWrite(h.db, { siteId: site!.id, text: 'x', base: null }, admin),
     ).toMatchObject({ ok: false });
+  });
+
+  it('uses manual settings instead of detection, and unlinks everything when switched off', async () => {
+    const cfg = loadConfig(env);
+    const linkedCount = async () =>
+      (
+        await q<{ n: number }>(
+          'select count(*)::int as n from sites where orion_container_id is not null',
+        )
+      )[0]!.n;
+    const total = mock.world.groups.length;
+    expect(await linkedCount()).toBe(total);
+
+    const manual = new SiteResolver(
+      h.db,
+      { ...cfg.mapping, siteGroupPattern: '^Site - Cold' },
+      silent,
+    );
+    expect(await manual.syncSiteGroups()).toMatchObject({ mode: 'manual', siteGroups: 1 });
+    expect(await linkedCount()).toBe(1);
+
+    const off = new SiteResolver(h.db, { ...cfg.mapping, siteGroupAuto: false }, silent);
+    expect(await off.syncSiteGroups()).toMatchObject({ mode: 'off', unlinked: 1 });
+    expect(await linkedCount()).toBe(0);
+
+    // Back to automatic: the same sites are linked again by name, none created.
+    const auto = new SiteResolver(h.db, cfg.mapping, silent);
+    expect(await auto.syncSiteGroups()).toMatchObject({
+      mode: 'auto',
+      siteGroups: total,
+      linked: total,
+      created: 0,
+    });
+    const unlinks = await q<{ n: number }>(
+      `select count(*)::int as n from audit_log where action = 'site.group_unlink'`,
+    );
+    expect(unlinks[0]!.n).toBe(total);
   });
 });

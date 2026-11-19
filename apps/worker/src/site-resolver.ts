@@ -1,13 +1,14 @@
 import {
   buildSiteResolutionContext,
+  chooseSiteGroups,
   classifyDeviceRole,
   isDeviceRole,
   planSiteGroupLinks,
   resolveNodeSite,
-  selectSiteGroups,
-  siteGroupsEnabled,
+  siteGroupMode,
   type Logger,
   type MappingConfig,
+  type NodeFacts,
   type SiteGroupConfig,
   type SiteResolutionContext,
 } from '@mercer/core';
@@ -16,8 +17,10 @@ import {
   createAutoSites,
   loadGroupMirror,
   loadGroupSiteMap,
+  loadNodeFacts,
   loadSiteContextData,
   loadSiteLinkRefs,
+  siteKeysAndLinks,
   type Db,
   type NodeSnapshotRow,
 } from '@mercer/db';
@@ -27,6 +30,8 @@ import type { SwisNode } from '@mercer/swis';
 export class SiteResolver {
   private ctx: SiteResolutionContext | null = null;
   private loadedAt = 0;
+  /** Site groups not yet chosen with device data (fresh start, or new mapping settings). */
+  private groupSyncPending = true;
 
   constructor(
     private readonly db: Db,
@@ -40,33 +45,72 @@ export class SiteResolver {
   }
 
   private get groupConfig(): SiteGroupConfig {
-    return { parent: this.mapping.siteGroupParent, pattern: this.mapping.siteGroupPattern };
+    return {
+      parent: this.mapping.siteGroupParent,
+      pattern: this.mapping.siteGroupPattern,
+      auto: this.mapping.siteGroupAuto,
+    };
   }
 
-  /** Link, create and rename sites to match the SolarWinds site groups (after a groups poll). */
-  async syncSiteGroups(): Promise<{
+  private role(n: SwisNode): ReturnType<typeof classifyDeviceRole> {
+    const customRole = this.mapping.roleField ? n.customProperties[this.mapping.roleField] : null;
+    return classifyDeviceRole({
+      caption: n.caption,
+      vendor: n.vendor,
+      machineType: n.machineType,
+      isServer: n.isServer,
+      customRole: typeof customRole === 'string' ? customRole : null,
+    });
+  }
+
+  /**
+   * Choose the site groups (settings or automatic detection) and link, create, rename or unlink
+   * sites to match. Runs after every groups poll, and on the first nodes poll with the devices
+   * just fetched, so a fresh install places devices by group straight away.
+   */
+  async syncSiteGroups(facts?: NodeFacts[]): Promise<{
+    mode: string;
     siteGroups: number;
     linked: number;
+    unlinked: number;
     renamed: number;
     created: number;
   }> {
-    const none = { siteGroups: 0, linked: 0, renamed: 0, created: 0 };
-    if (!siteGroupsEnabled(this.groupConfig)) return none;
+    const cfg = this.groupConfig;
+    const mode = siteGroupMode(cfg);
+    const none = { mode, siteGroups: 0, linked: 0, unlinked: 0, renamed: 0, created: 0 };
+    const siteRefs = await loadSiteLinkRefs(this.db);
+    if (mode === 'off' && !siteRefs.some((s) => s.orionContainerId !== null)) {
+      this.groupSyncPending = false;
+      return none;
+    }
+    let detect = null;
+    if (mode === 'auto') {
+      const nodes = facts ?? (await loadNodeFacts(this.db, this.mapping.siteField));
+      // No devices yet: wait for the nodes poll rather than unlinking everything.
+      if (!nodes.length) return none;
+      const { keys, linked } = siteKeysAndLinks(siteRefs);
+      detect = {
+        nodes,
+        captionRegex: this.mapping.siteFromCaptionRegex,
+        knownSiteKeys: keys,
+        linked,
+      };
+    }
     const { groups, members } = await loadGroupMirror(this.db);
-    const siteGroups = selectSiteGroups(groups, members, this.groupConfig);
-    const plan = planSiteGroupLinks(
-      siteGroups,
-      await loadSiteLinkRefs(this.db),
-      this.mapping.autoCreateSites,
-    );
+    const choice = chooseSiteGroups(groups, members, cfg, detect);
+    const plan = planSiteGroupLinks(choice.siteGroups, siteRefs, this.mapping.autoCreateSites);
     await applySiteGroupPlan(this.db, plan);
+    this.groupSyncPending = false;
     const out = {
-      siteGroups: siteGroups.length,
+      mode,
+      siteGroups: choice.siteGroups.length,
       linked: plan.link.length,
+      unlinked: plan.unlink.length,
       renamed: plan.rename.length,
       created: plan.create.length,
     };
-    if (out.linked || out.renamed || out.created)
+    if (out.linked || out.unlinked || out.renamed || out.created)
       this.log.info(out, 'sites updated from SolarWinds groups');
     this.invalidate();
     return out;
@@ -75,9 +119,8 @@ export class SiteResolver {
   private async context(force = false): Promise<SiteResolutionContext> {
     if (!force && this.ctx && Date.now() - this.loadedAt < this.ttlMs) return this.ctx;
     const data = await loadSiteContextData(this.db);
-    const groupSites = siteGroupsEnabled(this.groupConfig)
-      ? await loadGroupSiteMap(this.db, this.groupConfig)
-      : null;
+    const groupSites =
+      siteGroupMode(this.groupConfig) === 'off' ? null : await loadGroupSiteMap(this.db);
     if (groupSites?.ambiguous.length)
       this.log.warn(
         { nodes: groupSites.ambiguous.slice(0, 20), count: groupSites.ambiguous.length },
@@ -101,6 +144,19 @@ export class SiteResolver {
   async resolveAll(
     nodes: SwisNode[],
   ): Promise<{ rows: NodeSnapshotRow[]; unmapped: number; autoCreated: number }> {
+    if (this.groupSyncPending && nodes.length)
+      await this.syncSiteGroups(
+        nodes.map((n) => {
+          const v = n.customProperties[this.mapping.siteField];
+          return {
+            nodeId: n.nodeId,
+            caption: n.caption,
+            ip: n.ipAddress,
+            role: this.role(n),
+            siteValue: v === null || v === undefined ? null : String(v),
+          };
+        }),
+      );
     let ctx = await this.context();
     let autoCreated = 0;
     if (this.mapping.autoCreateSites) {
@@ -124,16 +180,7 @@ export class SiteResolver {
       const r = resolveNodeSite(n, ctx);
       if (r.siteId === null) unmapped++;
       const override = ctx.overrides.get(n.nodeId)?.deviceRole;
-      const customRole = this.mapping.roleField ? n.customProperties[this.mapping.roleField] : null;
-      const deviceRole = isDeviceRole(override)
-        ? override
-        : classifyDeviceRole({
-            caption: n.caption,
-            vendor: n.vendor,
-            machineType: n.machineType,
-            isServer: n.isServer,
-            customRole: typeof customRole === 'string' ? customRole : null,
-          });
+      const deviceRole = isDeviceRole(override) ? override : this.role(n);
       return {
         ...n,
         siteId: r.siteId,

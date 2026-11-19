@@ -1,17 +1,17 @@
-import { and, desc, eq, inArray, sql } from 'drizzle-orm';
+import { and, desc, eq, inArray, isNull, sql } from 'drizzle-orm';
 import {
   chunk,
   nodeSiteGroups,
+  normalizeKey,
   parseSwisUri,
-  selectSiteGroups,
   type GroupMemberRef,
   type GroupRef,
+  type NodeFacts,
   type SiteGroup,
-  type SiteGroupConfig,
   type SiteGroupPlan,
   type SiteLinkRef,
 } from '@mercer/core';
-import { orionGroupMembers, orionGroups, siteNotesWrites, sites } from '../schema';
+import { orionGroupMembers, orionGroups, orionNodes, siteNotesWrites, sites } from '../schema';
 import type { Db, DbOrTx } from '../client';
 import { writeAudit } from './audit';
 import type { Actor } from './settings';
@@ -99,6 +99,49 @@ export async function loadGroupMirror(
   return { groups, members };
 }
 
+/** What automatic site-group detection needs to know about each monitored device. */
+export async function loadNodeFacts(db: DbOrTx, siteField: string): Promise<NodeFacts[]> {
+  const rows = await db
+    .select({
+      nodeId: orionNodes.nodeId,
+      caption: orionNodes.caption,
+      ip: orionNodes.ipAddress,
+      role: orionNodes.deviceRole,
+      customProperties: orionNodes.customProperties,
+    })
+    .from(orionNodes)
+    .where(isNull(orionNodes.removedAt));
+  return rows.map((r) => {
+    const v = siteField
+      ? (r.customProperties as Record<string, unknown> | null)?.[siteField]
+      : null;
+    return {
+      nodeId: r.nodeId,
+      caption: r.caption,
+      ip: r.ip,
+      role: r.role,
+      siteValue: v === null || v === undefined ? null : String(v),
+    };
+  });
+}
+
+/** Normalized names, codes and aliases of all sites, and the groups they are linked to. */
+export function siteKeysAndLinks(siteRefs: readonly SiteLinkRef[]): {
+  keys: Set<string>;
+  linked: Set<number>;
+} {
+  const keys = new Set<string>();
+  const linked = new Set<number>();
+  for (const s of siteRefs) {
+    for (const k of [s.name, s.code, ...s.aliases]) {
+      const n = normalizeKey(k);
+      if (n) keys.add(n);
+    }
+    if (s.orionContainerId !== null) linked.add(s.orionContainerId);
+  }
+  return { keys, linked };
+}
+
 export async function loadSiteLinkRefs(db: DbOrTx): Promise<SiteLinkRef[]> {
   return db
     .select({
@@ -113,9 +156,24 @@ export async function loadSiteLinkRefs(db: DbOrTx): Promise<SiteLinkRef[]> {
 
 /** Apply a link plan from planSiteGroupLinks: one transaction, every change audited. */
 export async function applySiteGroupPlan(db: Db, plan: SiteGroupPlan): Promise<void> {
-  if (!plan.link.length && !plan.rename.length && !plan.create.length) return;
+  if (!plan.unlink.length && !plan.link.length && !plan.rename.length && !plan.create.length)
+    return;
   const actor: Actor = { actorType: 'system', actorLabel: 'worker' };
   await db.transaction(async (tx) => {
+    // Unlink first: a group ID can only belong to one site.
+    for (const u of plan.unlink) {
+      await tx
+        .update(sites)
+        .set({ orionContainerId: null, updatedAt: new Date() })
+        .where(eq(sites.id, u.siteId));
+      await writeAudit(tx, {
+        ...actor,
+        action: 'site.group_unlink',
+        targetType: 'site',
+        targetId: u.siteId,
+        before: { orionContainerId: u.containerId },
+      });
+    }
     for (const l of plan.link) {
       const [after] = await tx
         .update(sites)
@@ -173,23 +231,27 @@ export async function applySiteGroupPlan(db: Db, plan: SiteGroupPlan): Promise<v
   });
 }
 
-/** nodeId → siteId through SolarWinds site groups; empty when site groups are not configured. */
+/**
+ * nodeId → siteId through the groups currently linked to sites. The links are what the last
+ * site-group sync chose (manual settings or automatic detection), so placement follows it.
+ */
 export async function loadGroupSiteMap(
   db: DbOrTx,
-  cfg: SiteGroupConfig,
 ): Promise<{ byNode: Map<number, number>; ambiguous: number[]; siteGroups: SiteGroup[] }> {
-  const { groups, members } = await loadGroupMirror(db);
-  const siteGroups = selectSiteGroups(groups, members, cfg);
-  if (!siteGroups.length) return { byNode: new Map(), ambiguous: [], siteGroups };
   const links = await db
-    .select({ id: sites.id, containerId: sites.orionContainerId })
+    .select({ id: sites.id, name: sites.name, containerId: sites.orionContainerId })
     .from(sites)
-    .where(
-      inArray(
-        sites.orionContainerId,
-        siteGroups.map((g) => g.containerId),
-      ),
-    );
+    .where(sql`${sites.orionContainerId} IS NOT NULL`);
+  if (!links.length) return { byNode: new Map(), ambiguous: [], siteGroups: [] };
+  const { groups, members } = await loadGroupMirror(db);
+  const present = new Map(groups.map((g) => [g.containerId, g.name]));
+  const siteGroups: SiteGroup[] = links
+    .filter((l) => present.has(l.containerId!))
+    .map((l) => ({
+      containerId: l.containerId!,
+      groupName: present.get(l.containerId!)!,
+      siteName: l.name,
+    }));
   const siteByContainer = new Map(links.map((l) => [l.containerId!, l.id]));
   const { byNode: groupByNode, ambiguous } = nodeSiteGroups(siteGroups, members);
   const byNode = new Map<number, number>();

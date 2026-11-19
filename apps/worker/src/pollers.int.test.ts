@@ -84,7 +84,7 @@ describe.skipIf(!url)('worker ingestion (integration)', () => {
     }>(
       `select n.caption, s.code, n.division_code, n.site_source, n.device_role
          from orion_nodes n left join sites s on s.id = n.site_id
-        where n.caption in ('ROCK-FW01','ROCK-SCALE01','MEN-SW01','CEL-CORE01','COLD-UPS01','MPS-AP01','SPV-FW01','VWRT-RTR01')
+        where n.caption in ('ROCK-FW01','ROCK-SCALE01','MEN-SW01','MEN-FW01','CEL-CORE01','COLD-UPS01','MPS-AP01','SPV-FW01','VWRT-RTR01')
         order by n.caption`,
     );
     const by = Object.fromEntries(rows.map((r) => [r.caption, r]));
@@ -95,11 +95,14 @@ describe.skipIf(!url)('worker ingestion (integration)', () => {
       device_role: 'firewall',
     });
     expect(by['ROCK-SCALE01']).toMatchObject({ device_role: 'scale_system' });
+    // Mendon has no Site property: its switch is placed by its SolarWinds site group, and its
+    // firewall (not in the group) by the hostname prefix.
     expect(by['MEN-SW01']).toMatchObject({
       code: 'mendon',
-      site_source: 'caption',
+      site_source: 'group',
       division_code: 'grain',
     });
+    expect(by['MEN-FW01']).toMatchObject({ code: 'mendon', site_source: 'caption' });
     expect(by['CEL-CORE01']).toMatchObject({
       code: 'celina-hq',
       device_role: 'core_switch',

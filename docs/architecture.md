@@ -632,23 +632,44 @@ write-capable account. The worker does every write; the web app never calls SWIS
 
 Results go on the timeline or next to the notes, and in the audit log.
 
-**Sites from SolarWinds groups.** Set `SITE_GROUP_PARENT` (its sub-groups are the sites) and/or
-`SITE_GROUP_PATTERN` (a name regex whose first capture group is the site name, e.g.
-`^Site - (.+)$`). Then each matching group is one Site Profile, linked by
-`sites.orion_container_id`:
+**Sites from SolarWinds groups.** Which groups are sites (`core/site-groups.ts`, pure):
 
-- **Linking.** After every groups poll, the worker links a site group to an existing site
-  matched by name, code or alias, or creates one when `SITE_AUTO_CREATE` is on. When the group
-  is renamed, the site follows and keeps its old name as an alias. Each change is audited
-  (`site.group_link`, `site.group_rename`, `site.auto_create`).
-- **Placing devices.** A device belongs to the site group that contains it, directly or
-  through nested groups. If it is in several, the closest group wins, then the lowest ID, and
-  the overlap is logged. Resolution order: admin override → site group → Site custom property
-  → hostname prefix.
-- **Notes.** A linked site's notes are its group's description. MAS shows the polled value,
-  and an edit in MAS is written there by the worker. The worker reads the description first
-  and refuses with `conflict` if it changed in SolarWinds since the person loaded it.
-  Unlinked sites keep MAS-only notes (`contact_notes`).
+- **Automatic, the default (`SITE_GROUP_AUTO`).** A group is a site when at least 80 % of its
+  devices share a location and it holds two or more kinds of device or is named after a known
+  site.
+  - A location signal counts only if it tells devices apart network-wide, with at least 3
+    values covering at least half of the devices: the Site custom property, the hostname prefix
+    (`SITE_FROM_CAPTION_REGEX`), the /24 subnet or the /16 network.
+  - A group inside a site group is dropped, unless the outer group consists of several site
+    groups (a city or region): then the outer group is dropped instead.
+  - A group whose devices are 80 % inside another site group is dropped.
+  - A local group with its own devices becomes a site when most of its local siblings are
+    sites (a one-device site).
+  - A group linked to a site stays a site while it has devices, so placement doesn't flap.
+  - Every decision carries a reason, shown on the Mapping page.
+- **Manual.** `SITE_GROUP_PARENT` (its sub-groups) and/or `SITE_GROUP_PATTERN` (a name regex
+  whose first capture group is the site name) replace detection.
+
+After every groups poll, and on the first nodes poll (using the devices just fetched), the
+worker plans the links, linked by `sites.orion_container_id`:
+
+- **Matching.** A site group is linked to an existing site matched by name, code or alias, or a
+  site is created when `SITE_AUTO_CREATE` is on.
+- **Renames.** When the group is renamed, the site follows and keeps its old name as an alias.
+- **Unlinks.** Sites whose group is no longer a site group are unlinked.
+
+Each change is audited (`site.group_link`, `site.group_rename`, `site.group_unlink`,
+`site.auto_create`).
+
+**Placing devices.** A device belongs to the linked site group that contains it, directly or
+through nested groups. If it is in several, the closest group wins, then the lowest ID, and the
+overlap is logged. Resolution order: admin override → site group → Site custom property →
+hostname prefix.
+
+**Site notes.** A linked site's notes are its group's description. MAS shows the polled value,
+and an edit in MAS is written there by the worker. The worker reads the description first and
+refuses with `conflict` if it changed in SolarWinds since the person loaded it. Unlinked sites
+keep MAS-only notes (`contact_notes`).
 
 ## 10b. Configuration & first-run setup
 

@@ -66,6 +66,8 @@ export const envSchema = z.object({
   SITE_GROUP_PARENT: str(''),
   /** …and/or a pattern on group names; its first capture group, if any, is the site name. */
   SITE_GROUP_PATTERN: str(''),
+  /** With neither of the above: find the site groups automatically (see site-groups.ts). */
+  SITE_GROUP_AUTO: bool(true),
 
   // --- Retention ---
   RETENTION_RAW_DAYS: int(90, 1),
@@ -239,6 +241,7 @@ export interface MappingConfig {
   /** Which SolarWinds groups are sites; both null = groups are not used for sites. */
   siteGroupParent: string | null;
   siteGroupPattern: string | null;
+  siteGroupAuto: boolean;
 }
 
 export interface AppConfig {
@@ -552,6 +555,7 @@ export function loadConfig(
       autoCreateSites: e.SITE_AUTO_CREATE,
       siteGroupParent: e.SITE_GROUP_PARENT.trim() || null,
       siteGroupPattern: e.SITE_GROUP_PATTERN || null,
+      siteGroupAuto: e.SITE_GROUP_AUTO,
     },
     retention: {
       rawDays: e.RETENTION_RAW_DAYS,

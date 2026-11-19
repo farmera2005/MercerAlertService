@@ -336,19 +336,28 @@ Every write appears on the incident timeline or next to the site notes, and in t
 
 ### Sites from SolarWinds groups
 
-If each site is a group in SolarWinds, go to Settings → Mapping → **Sites from SolarWinds
-groups**. Name the group that holds the site groups (for example `Locations`), and/or give a
-pattern for site group names. With `^Site - (.+)$`, the group `Site - Rockford` becomes the site
-`Rockford`. The page lists the groups found and the MAS site each one maps to.
+If each site is a group in SolarWinds, MAS finds those groups by itself. Nothing needs to be set
+up. A group counts as a site when most of its devices share a location (the same Site property,
+hostname prefix or subnet) and it holds several kinds of device or is named after a site. That
+rules out groups like "All FortiGates" (devices at every site), "Critical servers" (one kind of
+device), regions that contain several site groups, and groups inside a site group (such as
+"Rockford Scales").
 
-- **One site per group.** Each site group becomes a site: an existing site is matched by name or
-  other name, otherwise one is created. Renaming the group renames the site, and the old name
-  stays as another name.
-- **Devices.** A device belongs to the site whose group contains it, including through nested
-  groups. Custom properties and hostname prefixes are only the fallback.
-- **Notes.** The group's **description** is the site's notes: shown on the site page, and
-  editable in Settings → Sites when write-back is on.
-- **Refresh.** Groups are read every 5 minutes (`SWIS_POLL_GROUPS_SEC`).
+- **One site per group.** Each site group becomes a site, named after the group ("Site -
+  Rockford" → "Rockford"). An existing site is matched by name or other name; otherwise one is
+  created. When a group is renamed, the site follows and keeps its old name as an other name.
+- **Devices** belong to the site whose group contains them, including through nested groups.
+  Custom properties and hostname prefixes are only the fallback.
+- **Notes.** The group's **description** is the site's notes. They show on the site page, and
+  can be edited in Settings → Sites when write-back is on.
+- **Stable.** Groups are re-read every 5 minutes (`SWIS_POLL_GROUPS_SEC`). Once a group is a
+  site, it stays one while it exists, so devices don't move back and forth.
+
+Settings → Mapping → **Sites from SolarWinds groups** lists what MAS found, why, and why the other
+groups are not sites. If it picks the wrong groups, open **Choose the groups yourself**. There you
+can name the group that holds the site groups, or give a name pattern such as `^Site - (.+)$`;
+either one replaces the automatic choice. Unchecking **Find the site groups automatically** stops
+using groups altogether.
 
 ---
 
