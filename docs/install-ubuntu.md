@@ -198,7 +198,9 @@ The code is in the private GitHub repository
 | Clone over SSH | `git@github.com:farmera2005/MercerAlertService.git` |
 | Default branch | `claude/solarwinds-alert-correlation-90rlgx`        |
 
-Because the repository is private, the VM uses a read-only **deploy key**.
+Because the repository is private, the VM uses a read-only **deploy key**. Run every command
+in this section as your own admin account, **without `sudo`**. Root has its own `~/.ssh`
+without the key, so `sudo git clone` fails with `Permission denied (publickey)`.
 
 Create the key on the VM:
 
@@ -213,36 +215,55 @@ cat ~/.ssh/mas_deploy.pub
 Add it in GitHub under the repository's
 [Settings → Deploy keys](https://github.com/farmera2005/MercerAlertService/settings/keys) →
 **Add deploy key**. This needs admin rights on the repository. Paste the public key, name it
-after the VM, and leave **Allow write access** unchecked. Then tell SSH to use the key for
-GitHub:
+after the VM, and leave **Allow write access** unchecked.
+
+Then tell SSH to use that key for GitHub. SSH only tries `~/.ssh/id_*` on its own, so without
+this, GitHub never sees the deploy key:
 
 ```bash
-printf 'Host github-mas\n  HostName github.com\n  User git\n  IdentityFile ~/.ssh/mas_deploy\n  IdentitiesOnly yes\n' >> ~/.ssh/config
+printf 'Host github.com\n  User git\n  IdentityFile ~/.ssh/mas_deploy\n  IdentitiesOnly yes\n' >> ~/.ssh/config
 ```
 
-If outbound port 22 is blocked, use GitHub's SSH-over-HTTPS endpoint instead: in that block,
-set `HostName ssh.github.com` and add `Port 443`.
+If outbound port 22 is blocked, use GitHub's SSH-over-HTTPS endpoint instead: add
+`HostName ssh.github.com` and `Port 443` to that block in `~/.ssh/config`.
 
 Check that the key works:
 
 ```bash
-ssh -T github-mas
+ssh -T git@github.com
 ```
 
 The first time, SSH asks you to confirm GitHub's host key. Compare the fingerprint with
 [GitHub's published fingerprints](https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/githubs-ssh-key-fingerprints)
-before answering `yes`. A working key gets the answer `Hi farmera2005/MercerAlertService!
-You've successfully authenticated, but GitHub does not provide shell access.`
+before answering `yes`. Its ED25519 fingerprint is
+`SHA256:+DiY3wvvV6TuJJhbpZisF/zLDA0zPMSvHdkr4UvCOqU`. A working key gets the answer
+`Hi farmera2005/MercerAlertService! You've successfully authenticated, but GitHub does not
+provide shell access.`
 
-Clone into `/opt/mercer-alert-service`. `github-mas` is the SSH alias above, standing in for
-`git@github.com`:
+If it says `Permission denied (publickey)` instead:
+
+1. Make sure you ran it without `sudo`.
+2. Check that SSH offers the deploy key. The output should mention `mas_deploy`:
+
+   ```bash
+   ssh -vT git@github.com 2>&1 | grep -E 'Offering public key|Authenticated'
+   ```
+
+3. Check that GitHub has this same key. Compare the fingerprint below with the one shown under
+   **Settings → Deploy keys** on GitHub:
+
+   ```bash
+   ssh-keygen -lf ~/.ssh/mas_deploy.pub
+   ```
+
+Clone into `/opt/mercer-alert-service`:
 
 ```bash
 sudo install -d -o $USER -g $USER /opt/mercer-alert-service
 ```
 
 ```bash
-git clone github-mas:farmera2005/MercerAlertService.git /opt/mercer-alert-service
+git clone git@github.com:farmera2005/MercerAlertService.git /opt/mercer-alert-service
 ```
 
 The clone checks out the default branch, which holds the current version; there are no release
@@ -818,6 +839,7 @@ CA:
 
 | Symptom                                                                                      | Cause and fix                                                                                                                                                        |
 | -------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `git clone` fails with `Permission denied (publickey)`                                       | The command ran with `sudo`, the `Host github.com` block is missing from `~/.ssh/config`, or the deploy key isn't on the repository. §3 has the checks.              |
 | `docker compose` isn't found, or rejects the `required` key under `env_file`                 | Compose is missing or older than 2.24. Install it from Docker's repository (§2).                                                                                     |
 | `permission denied while trying to connect to the Docker daemon socket`                      | Your account isn't in the `docker` group yet: sign out and back in after `usermod` (§2), or use `sudo`.                                                              |
 | `failed to bind host port … address already in use`                                          | Something else uses that port. For 5432 (a local Postgres), set `DB_PORT=55432` in `.env`. For 3000, set `WEB_PORT=127.0.0.1:3001` and change `proxy_pass` to match. |

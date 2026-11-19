@@ -49,8 +49,9 @@ Requirements:
 
 The code is in the private repository
 [farmera2005/MercerAlertService](https://github.com/farmera2005/MercerAlertService). The VM
-needs read access, for example a deploy key; the
-[install guide §3](docs/install-ubuntu.md#3-get-the-code) shows how.
+needs read access before the clone below works: a deploy key, and SSH told to use it for
+github.com. [Install guide §3](docs/install-ubuntu.md#3-get-the-code) shows how. Run the clone
+without `sudo`.
 
 ```bash
 git clone git@github.com:farmera2005/MercerAlertService.git /opt/mercer-alert-service && cd /opt/mercer-alert-service
