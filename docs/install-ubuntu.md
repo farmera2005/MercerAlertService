@@ -179,7 +179,23 @@ only the IT admins who run MAS:
 sudo usermod -aG docker $USER
 ```
 
-Sign out and back in for the group to take effect. The rest of this guide assumes you can run
+**Sign out and SSH back in.** Group membership only applies to new login sessions, so the
+shell you ran `usermod` in still can't reach Docker. Then check that `docker` appears in your
+groups:
+
+```bash
+id -nG
+```
+
+Check that Docker works **without** `sudo`:
+
+```bash
+docker run --rm hello-world
+```
+
+If this prints `permission denied while trying to connect to the docker API at
+unix:///var/run/docker.sock`, this session doesn't have the group yet: sign out and back in
+again. `newgrp docker` also works, for the current shell only. The rest of this guide runs
 `docker` without `sudo`.
 
 ---
@@ -850,20 +866,20 @@ CA:
 
 ## 14. Troubleshooting
 
-| Symptom                                                                                      | Cause and fix                                                                                                                                                         |
-| -------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `git clone` fails with `Permission denied (publickey)`                                       | You used the SSH address `git@github.com:…`: use the HTTPS address in §3, which needs no key. If the repository is private, §3's deploy-key steps include the checks. |
-| `docker compose` isn't found, or rejects the `required` key under `env_file`                 | Compose is missing or older than 2.24. Install it from Docker's repository (§2).                                                                                      |
-| `permission denied while trying to connect to the Docker daemon socket`                      | Your account isn't in the `docker` group yet: sign out and back in after `usermod` (§2), or use `sudo`.                                                               |
-| `failed to bind host port … address already in use`                                          | Something else uses that port. For 5432 (a local Postgres), set `DB_PORT=55432` in `.env`. For 3000, set `WEB_PORT=127.0.0.1:3001` and change `proxy_pass` to match.  |
-| The build fails with `SELF_SIGNED_CERT_IN_CHAIN` or `unable to get local issuer certificate` | A TLS-inspecting proxy: §13, `BUILD_CA_FILE`.                                                                                                                         |
-| No setup code in the log                                                                     | Setup is already complete (sign in instead), or `web` hasn't started: `docker compose ps -a`, `docker compose logs web`.                                              |
-| nginx: `socket() [::]:80 failed (97: …)`                                                     | IPv6 is disabled: remove the `listen [::]` lines (§6).                                                                                                                |
-| `502 Bad Gateway` from nginx                                                                 | `web` isn't running or listens elsewhere: `docker compose ps -a`, then check that `proxy_pass` matches `WEB_PORT`.                                                    |
-| `413 Request Entity Too Large` when uploading a map image                                    | `client_max_body_size` is missing from the nginx site (§6).                                                                                                           |
-| The audit log shows `172.x.x.x` for everyone                                                 | Turn on **Behind a reverse proxy** in Settings → General (§8).                                                                                                        |
-| The dot next to your name says **Reconnecting** all the time                                 | Something between the browser and MAS buffers or cuts long requests. Use the nginx site as given; check any other proxy or load balancer in the path.                 |
-| **Test connection** to Orion times out                                                       | Firewall between the VM and Orion on 17774 (check with the `curl` in §1).                                                                                             |
-| Orion fails with a certificate error                                                         | Fetch and trust the certificate again in Settings → SolarWinds, and check **Certificate name** ([The Orion certificate](../README.md#the-orion-certificate)).         |
-| The VM's disk is filling up                                                                  | `docker system df`, then `docker builder prune -f`. Check `BACKUP_KEEP_DAYS` and the retention settings in Settings → General.                                        |
-| Teams, SMS or AI calls fail behind a web proxy                                               | `NODE_USE_ENV_PROXY=1` and the proxy variables in `.env` (§13), plus the CA override if the proxy inspects TLS.                                                       |
+| Symptom                                                                                                                                  | Cause and fix                                                                                                                                                         |
+| ---------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `git clone` fails with `Permission denied (publickey)`                                                                                   | You used the SSH address `git@github.com:…`: use the HTTPS address in §3, which needs no key. If the repository is private, §3's deploy-key steps include the checks. |
+| `docker compose` isn't found, or rejects the `required` key under `env_file`                                                             | Compose is missing or older than 2.24. Install it from Docker's repository (§2).                                                                                      |
+| `permission denied while trying to connect to the docker API at unix:///var/run/docker.sock` (older Docker: `…the Docker daemon socket`) | Your session isn't in the `docker` group. Run `id -nG`: if `docker` is missing, run `sudo usermod -aG docker $USER`, then sign out and SSH back in (§2).              |
+| `failed to bind host port … address already in use`                                                                                      | Something else uses that port. For 5432 (a local Postgres), set `DB_PORT=55432` in `.env`. For 3000, set `WEB_PORT=127.0.0.1:3001` and change `proxy_pass` to match.  |
+| The build fails with `SELF_SIGNED_CERT_IN_CHAIN` or `unable to get local issuer certificate`                                             | A TLS-inspecting proxy: §13, `BUILD_CA_FILE`.                                                                                                                         |
+| No setup code in the log                                                                                                                 | Setup is already complete (sign in instead), or `web` hasn't started: `docker compose ps -a`, `docker compose logs web`.                                              |
+| nginx: `socket() [::]:80 failed (97: …)`                                                                                                 | IPv6 is disabled: remove the `listen [::]` lines (§6).                                                                                                                |
+| `502 Bad Gateway` from nginx                                                                                                             | `web` isn't running or listens elsewhere: `docker compose ps -a`, then check that `proxy_pass` matches `WEB_PORT`.                                                    |
+| `413 Request Entity Too Large` when uploading a map image                                                                                | `client_max_body_size` is missing from the nginx site (§6).                                                                                                           |
+| The audit log shows `172.x.x.x` for everyone                                                                                             | Turn on **Behind a reverse proxy** in Settings → General (§8).                                                                                                        |
+| The dot next to your name says **Reconnecting** all the time                                                                             | Something between the browser and MAS buffers or cuts long requests. Use the nginx site as given; check any other proxy or load balancer in the path.                 |
+| **Test connection** to Orion times out                                                                                                   | Firewall between the VM and Orion on 17774 (check with the `curl` in §1).                                                                                             |
+| Orion fails with a certificate error                                                                                                     | Fetch and trust the certificate again in Settings → SolarWinds, and check **Certificate name** ([The Orion certificate](../README.md#the-orion-certificate)).         |
+| The VM's disk is filling up                                                                                                              | `docker system df`, then `docker builder prune -f`. Check `BACKUP_KEEP_DAYS` and the retention settings in Settings → General.                                        |
+| Teams, SMS or AI calls fail behind a web proxy                                                                                           | `NODE_USE_ENV_PROXY=1` and the proxy variables in `.env` (§13), plus the CA override if the proxy inspects TLS.                                                       |
