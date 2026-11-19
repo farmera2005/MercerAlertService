@@ -339,6 +339,18 @@ code. `.env` is in `.gitignore`: never commit it.
 
 ## 5. Build and start
 
+The build downloads packages from inside containers, and those can be blocked even when the VM
+itself has internet access. Check first; it takes seconds, and the build takes minutes:
+
+```bash
+docker run --rm node:24-bookworm-slim node -e "fetch('https://registry.npmjs.org/pnpm',{method:'HEAD'}).then(r=>console.log('OK',r.status)).catch(e=>console.log('FAILED:',e.cause?.code||e.cause?.message||e.message))"
+```
+
+It should print `OK 200`. If it prints `FAILED: …`, fix that first: see
+[The build can't download packages](#the-build-cant-download-packages).
+
+Then build and start:
+
 ```bash
 APP_VERSION=$(git describe --always) docker compose up -d --build
 ```
@@ -866,20 +878,77 @@ CA:
 
 ## 14. Troubleshooting
 
-| Symptom                                                                                                                                  | Cause and fix                                                                                                                                                         |
-| ---------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `git clone` fails with `Permission denied (publickey)`                                                                                   | You used the SSH address `git@github.com:…`: use the HTTPS address in §3, which needs no key. If the repository is private, §3's deploy-key steps include the checks. |
-| `docker compose` isn't found, or rejects the `required` key under `env_file`                                                             | Compose is missing or older than 2.24. Install it from Docker's repository (§2).                                                                                      |
-| `permission denied while trying to connect to the docker API at unix:///var/run/docker.sock` (older Docker: `…the Docker daemon socket`) | Your session isn't in the `docker` group. Run `id -nG`: if `docker` is missing, run `sudo usermod -aG docker $USER`, then sign out and SSH back in (§2).              |
-| `failed to bind host port … address already in use`                                                                                      | Something else uses that port. For 5432 (a local Postgres), set `DB_PORT=55432` in `.env`. For 3000, set `WEB_PORT=127.0.0.1:3001` and change `proxy_pass` to match.  |
-| The build fails with `SELF_SIGNED_CERT_IN_CHAIN` or `unable to get local issuer certificate`                                             | A TLS-inspecting proxy: §13, `BUILD_CA_FILE`.                                                                                                                         |
-| No setup code in the log                                                                                                                 | Setup is already complete (sign in instead), or `web` hasn't started: `docker compose ps -a`, `docker compose logs web`.                                              |
-| nginx: `socket() [::]:80 failed (97: …)`                                                                                                 | IPv6 is disabled: remove the `listen [::]` lines (§6).                                                                                                                |
-| `502 Bad Gateway` from nginx                                                                                                             | `web` isn't running or listens elsewhere: `docker compose ps -a`, then check that `proxy_pass` matches `WEB_PORT`.                                                    |
-| `413 Request Entity Too Large` when uploading a map image                                                                                | `client_max_body_size` is missing from the nginx site (§6).                                                                                                           |
-| The audit log shows `172.x.x.x` for everyone                                                                                             | Turn on **Behind a reverse proxy** in Settings → General (§8).                                                                                                        |
-| The dot next to your name says **Reconnecting** all the time                                                                             | Something between the browser and MAS buffers or cuts long requests. Use the nginx site as given; check any other proxy or load balancer in the path.                 |
-| **Test connection** to Orion times out                                                                                                   | Firewall between the VM and Orion on 17774 (check with the `curl` in §1).                                                                                             |
-| Orion fails with a certificate error                                                                                                     | Fetch and trust the certificate again in Settings → SolarWinds, and check **Certificate name** ([The Orion certificate](../README.md#the-orion-certificate)).         |
-| The VM's disk is filling up                                                                                                              | `docker system df`, then `docker builder prune -f`. Check `BACKUP_KEEP_DAYS` and the retention settings in Settings → General.                                        |
-| Teams, SMS or AI calls fail behind a web proxy                                                                                           | `NODE_USE_ENV_PROXY=1` and the proxy variables in `.env` (§13), plus the CA override if the proxy inspects TLS.                                                       |
+| Symptom                                                                                                                                                                                                         | Cause and fix                                                                                                                                                         |
+| --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `git clone` fails with `Permission denied (publickey)`                                                                                                                                                          | You used the SSH address `git@github.com:…`: use the HTTPS address in §3, which needs no key. If the repository is private, §3's deploy-key steps include the checks. |
+| `docker compose` isn't found, or rejects the `required` key under `env_file`                                                                                                                                    | Compose is missing or older than 2.24. Install it from Docker's repository (§2).                                                                                      |
+| `permission denied while trying to connect to the docker API at unix:///var/run/docker.sock` (older Docker: `…the Docker daemon socket`)                                                                        | Your session isn't in the `docker` group. Run `id -nG`: if `docker` is missing, run `sudo usermod -aG docker $USER`, then sign out and SSH back in (§2).              |
+| `failed to bind host port … address already in use`                                                                                                                                                             | Something else uses that port. For 5432 (a local Postgres), set `DB_PORT=55432` in `.env`. For 3000, set `WEB_PORT=127.0.0.1:3001` and change `proxy_pass` to match.  |
+| The build fails at `corepack prepare pnpm…` or `pnpm install` with `Error when performing the request to https://registry.npmjs.org/…`, `SELF_SIGNED_CERT_IN_CHAIN` or `unable to get local issuer certificate` | The build containers can't reach the npm registry. See [The build can't download packages](#the-build-cant-download-packages) below.                                  |
+| No setup code in the log                                                                                                                                                                                        | Setup is already complete (sign in instead), or `web` hasn't started: `docker compose ps -a`, `docker compose logs web`.                                              |
+| nginx: `socket() [::]:80 failed (97: …)`                                                                                                                                                                        | IPv6 is disabled: remove the `listen [::]` lines (§6).                                                                                                                |
+| `502 Bad Gateway` from nginx                                                                                                                                                                                    | `web` isn't running or listens elsewhere: `docker compose ps -a`, then check that `proxy_pass` matches `WEB_PORT`.                                                    |
+| `413 Request Entity Too Large` when uploading a map image                                                                                                                                                       | `client_max_body_size` is missing from the nginx site (§6).                                                                                                           |
+| The audit log shows `172.x.x.x` for everyone                                                                                                                                                                    | Turn on **Behind a reverse proxy** in Settings → General (§8).                                                                                                        |
+| The dot next to your name says **Reconnecting** all the time                                                                                                                                                    | Something between the browser and MAS buffers or cuts long requests. Use the nginx site as given; check any other proxy or load balancer in the path.                 |
+| **Test connection** to Orion times out                                                                                                                                                                          | Firewall between the VM and Orion on 17774 (check with the `curl` in §1).                                                                                             |
+| Orion fails with a certificate error                                                                                                                                                                            | Fetch and trust the certificate again in Settings → SolarWinds, and check **Certificate name** ([The Orion certificate](../README.md#the-orion-certificate)).         |
+| The VM's disk is filling up                                                                                                                                                                                     | `docker system df`, then `docker builder prune -f`. Check `BACKUP_KEEP_DAYS` and the retention settings in Settings → General.                                        |
+| Teams, SMS or AI calls fail behind a web proxy                                                                                                                                                                  | `NODE_USE_ENV_PROXY=1` and the proxy variables in `.env` (§13), plus the CA override if the proxy inspects TLS.                                                       |
+
+### The build can't download packages
+
+Corepack and pnpm only report that the download failed. To see why, run the check from §5. It
+uses the same base image and the same Docker network as the build:
+
+```bash
+docker run --rm node:24-bookworm-slim node -e "fetch('https://registry.npmjs.org/pnpm',{method:'HEAD'}).then(r=>console.log('OK',r.status)).catch(e=>console.log('FAILED:',e.cause?.code||e.cause?.message||e.message))"
+```
+
+Compare with the VM itself:
+
+```bash
+curl -sSI -o /dev/null -w '%{http_code}\n' https://registry.npmjs.org/pnpm
+```
+
+| The check prints                                                                                                       | Cause                                                                                                                                                                        | Fix                                                                                                                      |
+| ---------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| `FAILED: EAI_AGAIN` or `FAILED: ENOTFOUND`, and `curl` prints `200`                                                    | Containers can't resolve names. When Docker finds no usable DNS server on the VM, it gives containers Google's `8.8.8.8` / `8.8.4.4`, which corporate firewalls often block. | Give Docker your DNS servers (below).                                                                                    |
+| `FAILED: SELF_SIGNED_CERT_IN_CHAIN`, `UNABLE_TO_GET_ISSUER_CERT_LOCALLY` or `UNABLE_TO_VERIFY_LEAF_SIGNATURE`          | A firewall or proxy inspects TLS (for example FortiGate SSL deep inspection) and presents its own certificate.                                                               | Ask for the build hosts in §0 to be exempt from inspection, or give the build the inspecting CA: `BUILD_CA_FILE` in §13. |
+| `FAILED: UND_ERR_CONNECT_TIMEOUT`, `ETIMEDOUT`, `ECONNREFUSED` or `ECONNRESET`, and `curl` fails too (or prints `000`) | The firewall doesn't let the VM reach the npm registry.                                                                                                                      | Allow the install-and-upgrade hosts in §0, or use the web proxy (§13).                                                   |
+| The same errors, but `curl` prints `200`                                                                               | Only container traffic is affected, often because the network's MTU is below 1500 and large TLS packets are dropped.                                                         | Check `ip link` for the VM's interface MTU. If it is below 1500, set Docker's MTU to that value or lower (below).        |
+| `OK 200`                                                                                                               | The registry was briefly unreachable.                                                                                                                                        | Run the build again.                                                                                                     |
+
+**Give Docker your DNS servers.** First see which servers the VM uses:
+
+```bash
+resolvectl dns
+```
+
+Then put them in Docker's configuration file. Replace the example addresses with yours:
+
+```bash
+echo '{ "dns": ["10.20.0.10", "10.20.0.11"] }' | sudo tee /etc/docker/daemon.json
+```
+
+If `/etc/docker/daemon.json` already exists (for example with the proxy settings from §13), add
+the `"dns"` entry to it instead of overwriting it. Then restart Docker:
+
+```bash
+sudo systemctl restart docker
+```
+
+Check which servers containers now get, run the §5 check again, and build:
+
+```bash
+docker run --rm node:24-bookworm-slim grep nameserver /etc/resolv.conf
+```
+
+**Set Docker's MTU.** Put `"mtu"` in `/etc/docker/daemon.json` with the VM's MTU, for example
+`{ "mtu": 1400 }` (merge it with any existing entries), then restart Docker:
+
+```bash
+sudo systemctl restart docker
+```
+
+Both settings apply to build containers as well as to the running MAS containers.

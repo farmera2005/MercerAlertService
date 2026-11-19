@@ -78,6 +78,8 @@ services:
   migrate:
     <<: *app
     image: mercer-alert-service/worker:${APP_VERSION:-dev}
+    # Built locally by `init` (same image); never look for it on Docker Hub.
+    pull_policy: never
     command: ['node', 'dist/migrate.js']
     restart: 'no'
     depends_on:
@@ -86,6 +88,7 @@ services:
   worker:
     <<: *app
     image: mercer-alert-service/worker:${APP_VERSION:-dev}
+    pull_policy: never
     restart: unless-stopped
     depends_on:
       migrate: { condition: service_completed_successfully }
