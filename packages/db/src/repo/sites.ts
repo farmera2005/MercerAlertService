@@ -1,4 +1,4 @@
-import { eq, sql } from 'drizzle-orm';
+import { eq, inArray, sql } from 'drizzle-orm';
 import { slugify, type DivisionRef, type NodeOverride, type SiteRef } from '@mercer/core';
 import { divisions, nodeSiteOverrides, sites } from '../schema';
 import type { Db, DbOrTx } from '../client';
@@ -19,7 +19,7 @@ export async function loadSiteContextData(db: DbOrTx): Promise<SiteContextData> 
         code: sites.code,
         name: sites.name,
         aliases: sites.aliases,
-        divisionCode: sites.divisionCode,
+        divisionCodes: sites.divisionCodes,
       })
       .from(sites),
     db
@@ -103,7 +103,7 @@ export async function listDivisions(db: DbOrTx): Promise<DivisionRow[]> {
 export type SiteInput = Pick<
   typeof sites.$inferInsert,
   | 'name'
-  | 'divisionCode'
+  | 'divisionCodes'
   | 'city'
   | 'state'
   | 'lat'
@@ -125,12 +125,24 @@ interface SiteActor {
   userAgent?: string | null;
 }
 
+/** Known division codes only, once each, in divisions order. */
+async function orderedDivisionCodes(db: DbOrTx, codes: readonly string[]): Promise<string[]> {
+  if (!codes.length) return [];
+  const rows = await db
+    .select({ code: divisions.code })
+    .from(divisions)
+    .where(inArray(divisions.code, [...new Set(codes)]))
+    .orderBy(divisions.sortOrder, divisions.name);
+  return rows.map((r) => r.code);
+}
+
 export async function createSite(db: Db, input: SiteInput, actor: SiteActor): Promise<SiteRow> {
   return db.transaction(async (tx) => {
     const code = input.code?.trim() || slugify(input.name);
+    const divisionCodes = await orderedDivisionCodes(tx, input.divisionCodes ?? []);
     const [row] = await tx
       .insert(sites)
-      .values({ ...input, code, profileStatus: 'confirmed' })
+      .values({ ...input, divisionCodes, code, profileStatus: 'confirmed' })
       .returning();
     await writeAudit(tx, {
       ...actor,
@@ -152,6 +164,8 @@ export async function updateSite(
   return db.transaction(async (tx) => {
     const [before] = await tx.select().from(sites).where(eq(sites.id, id));
     if (!before) return null;
+    if (patch.divisionCodes)
+      patch = { ...patch, divisionCodes: await orderedDivisionCodes(tx, patch.divisionCodes) };
     const [after] = await tx
       .update(sites)
       .set({ ...patch, profileStatus: 'confirmed', updatedAt: new Date() })

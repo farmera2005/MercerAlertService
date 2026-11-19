@@ -203,14 +203,12 @@ async function dispatch(d: NotifyDeps, now: Date): Promise<{ incidents: number; 
     const recent = new Map(shared.recentPages);
     let planned = 0;
     for (const c of candidates) {
-      const inc = toNotifyIncident(c.incident, c.site?.name ?? null, c.divisionName);
+      const inc = toNotifyIncident(c.incident, c.site?.name ?? null, c.divisionNames);
       const code = inc.seeded ? 'pending' : await ensureShortLink(tx, inc.id, now);
       const ctx: DispatchContext = {
         ...shared,
         recentPages: recent,
-        withinBusinessHours: shared.hoursFor(
-          c.site ? { ...c.site, divisionName: c.divisionName } : null,
-        ),
+        withinBusinessHours: shared.hoursFor(c.site),
         links: links(d.cfg, inc.id, code),
       };
       const plan = planDispatch(inc, c.state ? toNotifyState(c.state) : null, ctx);
@@ -239,7 +237,11 @@ async function fireEscalations(d: NotifyDeps, now: Date): Promise<number> {
         await finishEscalation(tx, e.id, now, 'gone');
         return;
       }
-      const inc = toNotifyIncident(detail.incident, detail.site?.name ?? null, detail.divisionName);
+      const inc = toNotifyIncident(
+        detail.incident,
+        detail.site?.name ?? null,
+        detail.divisionNames,
+      );
       const code = await ensureShortLink(tx, inc.id, now);
       const plan = planEscalation(
         inc,
@@ -247,9 +249,7 @@ async function fireEscalations(d: NotifyDeps, now: Date): Promise<number> {
         e.level,
         {
           ...shared,
-          withinBusinessHours: shared.hoursFor(
-            detail.site ? { ...detail.site, divisionName: detail.divisionName } : null,
-          ),
+          withinBusinessHours: shared.hoursFor(detail.site),
           links: links(d.cfg, inc.id, code),
         },
         e.afterMin,

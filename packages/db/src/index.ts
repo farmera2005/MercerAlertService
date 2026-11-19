@@ -8,6 +8,7 @@ export * from './repo/heartbeat';
 export * from './repo/audit';
 export * from './repo/events-bus';
 export * from './repo/sites';
+export * from './repo/divisions';
 export * from './repo/ingest-alerts';
 export * from './repo/ingest-nodes';
 export * from './repo/ingest-interfaces';

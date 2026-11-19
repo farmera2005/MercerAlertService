@@ -538,7 +538,7 @@ class Engine {
         explanation: [],
       },
       primarySiteId: null,
-      divisionCode: null,
+      divisionCodes: [],
       affectedSiteIds: [],
       rootNodeId: null,
       rootEntityUri: null,
@@ -790,7 +790,7 @@ class Engine {
     inc.rootEntityUri =
       rootNodeId !== null ? (active.find((r) => r.nodeId === rootNodeId)?.entityUri ?? null) : null;
     inc.primarySiteId = primarySiteId;
-    inc.divisionCode = site?.divisionCode ?? inc.divisionCode;
+    if (site?.divisionCodes.length) inc.divisionCodes = [...site.divisionCodes];
     inc.affectedSiteIds = [...affected].sort((a, b) => a - b);
     inc.baseScore = scored.score;
     inc.basePriority = scored.priority;

@@ -158,7 +158,8 @@ export interface SiteRef {
   code: string;
   name: string;
   aliases: readonly string[];
-  divisionCode: string | null;
+  /** A site can serve several divisions (a grain elevator with an agronomy center). */
+  divisionCodes: readonly string[];
 }
 
 export interface DivisionRef {
@@ -300,8 +301,12 @@ export function resolveNodeSite(
     const cpDiv = cpString(node.customProperties, ctx.config.divisionField);
     if (cpDiv) divisionCode = ctx.divisionsByKey.get(normalizeKey(cpDiv))?.code ?? null;
   }
-  if (!divisionCode && siteId !== null)
-    divisionCode = ctx.sitesById.get(siteId)?.divisionCode ?? null;
+  // A device takes its site's division only when the site has just one; at a shared site, its
+  // own Division property (or an override) says which one it belongs to.
+  if (!divisionCode && siteId !== null) {
+    const codes = ctx.sitesById.get(siteId)?.divisionCodes ?? [];
+    if (codes.length === 1) divisionCode = codes[0]!;
+  }
 
   return { siteId, unmatchedSiteValue, divisionCode, source };
 }

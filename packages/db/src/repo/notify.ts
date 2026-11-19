@@ -14,7 +14,6 @@ import {
   type PlannedMessage,
 } from '@mercer/core';
 import {
-  divisions,
   escalations,
   incidentNotifyState,
   incidents,
@@ -23,6 +22,7 @@ import {
   shortLinks,
   sites,
 } from '../schema';
+import { divisionNameList } from './divisions';
 import type { Db, DbOrTx, Tx } from '../client';
 
 export type NotificationRow = typeof notifications.$inferSelect;
@@ -43,7 +43,7 @@ export async function lockNotify(tx: Tx): Promise<void> {
 export interface DispatchCandidate {
   incident: IncidentRow;
   site: SiteRow | null;
-  divisionName: string | null;
+  divisionNames: string[];
   state: StateRow | null;
 }
 
@@ -60,11 +60,15 @@ export async function loadDispatchCandidates(
   const s = incidentNotifyState;
   const snoozeNow = sql`CASE WHEN ${i.snoozedUntil} > ${now} THEN ${i.snoozedUntil} END`;
   const rows = await db
-    .select({ incident: i, site: sites, divisionName: divisions.name, state: s })
+    .select({
+      incident: i,
+      site: sites,
+      divisionNames: divisionNameList(i.divisionCodes),
+      state: s,
+    })
     .from(i)
     .leftJoin(s, eq(s.incidentId, i.id))
     .leftJoin(sites, eq(sites.id, i.primarySiteId))
-    .leftJoin(divisions, eq(divisions.code, i.divisionCode))
     .where(
       sql`(${s.incidentId} IS NULL AND ${i.status} IN ('open','acknowledged'))
         OR (${s.incidentId} IS NOT NULL AND (
@@ -85,7 +89,7 @@ export async function loadDispatchCandidates(
 export function toNotifyIncident(
   i: IncidentRow,
   siteName: string | null,
-  divisionName: string | null,
+  divisionNames: string[],
 ): NotifyIncident {
   return {
     id: i.id,
@@ -97,8 +101,8 @@ export function toNotifyIncident(
     siteId: i.primarySiteId,
     siteName,
     affectedSiteIds: i.affectedSiteIds,
-    divisionCode: i.divisionCode,
-    divisionName,
+    divisionCodes: i.divisionCodes,
+    divisionNames,
     alertCount: i.alertCount,
     openedAt: i.openedAt,
     acknowledgedBy: i.acknowledgedBy,
@@ -552,10 +556,13 @@ export async function claimNotification(
 /** The incident with its site and division, as the notification planner needs it. */
 export async function loadIncidentForNotify(db: DbOrTx, id: number) {
   const [row] = await db
-    .select({ incident: incidents, site: sites, divisionName: divisions.name })
+    .select({
+      incident: incidents,
+      site: sites,
+      divisionNames: divisionNameList(incidents.divisionCodes),
+    })
     .from(incidents)
     .leftJoin(sites, eq(sites.id, incidents.primarySiteId))
-    .leftJoin(divisions, eq(divisions.code, incidents.divisionCode))
     .where(eq(incidents.id, id));
   return row ?? null;
 }

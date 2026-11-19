@@ -165,7 +165,10 @@ export function teamsCard(i: NotifyIncident, o: CardOptions): TeamsPayload {
     type: 'FactSet',
     facts: [
       { title: 'Site', value: i.siteName ?? '—' },
-      { title: 'Division', value: i.divisionName ?? '—' },
+      {
+        title: i.divisionNames.length > 1 ? 'Divisions' : 'Division',
+        value: i.divisionNames.join(', ') || '—',
+      },
       { title: 'Alerts', value: String(i.alertCount) },
       {
         title: o.kind === 'resolved' ? 'Duration' : 'Open for',

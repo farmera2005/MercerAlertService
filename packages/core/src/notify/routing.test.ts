@@ -6,7 +6,7 @@ const rules: RoutingRule[] = DEFAULT_ROUTING_RULES.map((r, i) => ({ ...r, id: i 
 const subject = (p: Partial<RouteSubject>): RouteSubject => ({
   priority: 'P3',
   kind: 'interface',
-  divisionCode: 'grain',
+  divisionCodes: ['grain'],
   siteId: 4,
   affectedSiteIds: [4],
   withinBusinessHours: true,
@@ -72,13 +72,26 @@ describe('routeIncident (custom rules)', () => {
     ...rules.map((r) => ({ ...r, id: r.id + 10, position: r.position + 10 })),
   ];
 
+  it('matches a division rule when the site has that division among others', () => {
+    const affiliates = custom[0]!;
+    const shared = subject({ divisionCodes: ['feed', 'mps_feed'] });
+    expect(routeIncident([affiliates], shared).channelKeys).toEqual(['affiliates']);
+    expect(routeIncident([affiliates], subject({ divisionCodes: ['feed'] })).channelKeys).toEqual(
+      [],
+    );
+    // An incident without a division matches only rules for every division.
+    expect(routeIncident([affiliates], subject({ divisionCodes: [] })).channelKeys).toEqual([]);
+  });
+
   it('stops at a matching stop rule', () => {
-    expect(routeIncident(custom, subject({ divisionCode: 'mps_feed', priority: 'P1' }))).toEqual({
-      channelKeys: ['affiliates'],
-      page: false,
-      escalateAfterMin: null,
-      ruleIds: [1],
-    });
+    expect(routeIncident(custom, subject({ divisionCodes: ['mps_feed'], priority: 'P1' }))).toEqual(
+      {
+        channelKeys: ['affiliates'],
+        page: false,
+        escalateAfterMin: null,
+        ruleIds: [1],
+      },
+    );
   });
 
   it('combines matching rules, takes the shortest escalation and skips disabled rules', () => {

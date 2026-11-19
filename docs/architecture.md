@@ -286,7 +286,7 @@ score = impact points × Orion severity × site tier × season × time of day
   severity: critical 1.0 · serious 0.85 · warning 0.6 · notice 0.4 · informational 0.25
   tier:     critical 1.4 · high 1.2 · standard 1.0                        (Settings → Correlation)
   season:   harvest at a harvest-critical site → Harvest multiplier (1.5); harvest at other grain
-            sites 1.2; other periods by division                         (Settings → Seasons)
+            sites 1.2; other periods by division, matching any of the site's (Settings → Seasons)
   time:     outside the site's business hours (harvest hours in harvest) 0.8 — not applied to
             site outages / firewall down at harvest-critical sites during harvest
 P1 ≥ 70 · P2 ≥ 50 · P3 ≥ 30 · else P4; "Monitoring source down" is always P1.
@@ -499,8 +499,8 @@ announced (`incident_notify_state`) and reacts to the difference:
 Running the planner twice with nothing new produces nothing, so a missed trigger is caught by
 the next tick. Pre-existing incidents found at startup are never announced.
 
-**Routing** (Settings → Routing) is an ordered rule list: match priorities, kinds, divisions,
-sites and business/after hours (the site's hours, harvest hours in harvest); post to a Teams
+**Routing** (Settings → Routing) is an ordered rule list: match priorities, kinds, divisions
+(any of the incident's: a site can have several), sites and business/after hours (the site's hours, harvest hours in harvest); post to a Teams
 channel and/or page on-call with an escalation delay; optionally stop. The defaults: P1–P2 to
 `#net-critical`, P3–P4 to `#net-alerts`, page for every P1 and for P2 after business hours.
 
@@ -546,7 +546,8 @@ channel), at most hourly each, and a banner on every dashboard page.
 ## 10. Web, live updates and the wall (implemented in M3)
 
 **Pages.** Overview (`/`): P1–P4 counts, noise ratio, SolarWinds status and poll ages, a site
-tile per site grouped by division, the map and the open incidents. Incidents (`/incidents`):
+tile per site grouped by division (a site with several divisions is in each group), the map
+and the open incidents. Incidents (`/incidents`):
 one row of filters (status, opened, priority, division, site, kind, search, `INC-123`),
 paged. Incident detail: summary, member alerts with their role, a merged timeline, timing and
 recovery target, the priority explanation, affected devices and interfaces, and actions. Sites
@@ -673,7 +674,9 @@ Each change is audited (`site.group_link`, `site.group_rename`, `site.group_unli
 **Placing devices.** A device belongs to the linked site group that contains it, directly or
 through nested groups. If it is in several, the closest group wins, then the lowest ID, and the
 overlap is logged. Resolution order: admin override → site group → Site custom property →
-hostname prefix.
+hostname prefix. A device's division comes from an override or its Division custom property;
+otherwise it takes its site's division only when the site has one. At a site with several
+divisions, incidents carry all of the site's divisions.
 
 **Site notes.** A linked site's notes are its group's description. MAS shows the polled value,
 and an edit in MAS is written there by the worker. The worker reads the description first and

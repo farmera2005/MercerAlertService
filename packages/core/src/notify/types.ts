@@ -89,8 +89,8 @@ export interface NotifyIncident {
   siteId: number | null;
   siteName: string | null;
   affectedSiteIds: number[];
-  divisionCode: string | null;
-  divisionName: string | null;
+  divisionCodes: string[];
+  divisionNames: string[];
   alertCount: number;
   openedAt: Date;
   acknowledgedBy: string | null;

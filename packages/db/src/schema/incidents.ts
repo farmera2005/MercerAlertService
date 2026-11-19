@@ -77,7 +77,11 @@ export const incidents = pgTable(
     /** ok · fallback · error · refused · budget_blocked · disabled (shown next to the summary). */
     aiStatus: text('ai_status'),
     primarySiteId: integer('primary_site_id').references(() => sites.id, { onDelete: 'set null' }),
-    divisionCode: text('division_code'),
+    /** The primary site's divisions. */
+    divisionCodes: text('division_codes')
+      .array()
+      .notNull()
+      .default(sql`'{}'::text[]`),
     affectedSiteIds: integer('affected_site_ids')
       .array()
       .notNull()

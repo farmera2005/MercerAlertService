@@ -37,6 +37,7 @@ import {
   sites,
 } from '../schema';
 import type { DbOrTx } from '../client';
+import { divisionNames } from './divisions';
 import { inSequence } from './helpers';
 
 export type IncidentRow = typeof incidents.$inferSelect;
@@ -51,8 +52,14 @@ const OPEN_STATUSES = ['open', 'acknowledged'] as const;
 // ---------------------------------------------------------------------------------------------
 
 export interface OverviewSite extends SiteRowFull {
+  /** The site's division names, joined for display. */
   divisionName: string | null;
-  divisionSort: number;
+}
+
+export interface OverviewDivision {
+  code: string;
+  name: string;
+  sortOrder: number;
   isAffiliate: boolean;
 }
 
@@ -68,22 +75,26 @@ export type OverviewIncident = IncidentRow & { siteName: string | null };
 
 export interface OverviewData {
   sites: OverviewSite[];
+  divisions: OverviewDivision[];
   nodes: OverviewNode[];
   openIncidents: OverviewIncident[];
 }
 
 export async function loadOverview(db: DbOrTx): Promise<OverviewData> {
-  const [siteRows, nodeRows, incRows] = await inSequence([
+  const [siteRows, divisionRows, nodeRows, incRows] = await inSequence([
+    db
+      .select({ site: sites, divisionName: divisionNames(sites.divisionCodes) })
+      .from(sites)
+      .orderBy(asc(sites.name)),
     db
       .select({
-        site: sites,
-        divisionName: divisions.name,
-        divisionSort: divisions.sortOrder,
+        code: divisions.code,
+        name: divisions.name,
+        sortOrder: divisions.sortOrder,
         isAffiliate: divisions.isAffiliate,
       })
-      .from(sites)
-      .leftJoin(divisions, eq(divisions.code, sites.divisionCode))
-      .orderBy(asc(divisions.sortOrder), asc(sites.name)),
+      .from(divisions)
+      .orderBy(asc(divisions.sortOrder), asc(divisions.name)),
     db
       .select({
         nodeId: orionNodes.nodeId,
@@ -102,12 +113,8 @@ export async function loadOverview(db: DbOrTx): Promise<OverviewData> {
       .orderBy(asc(incidents.priority), desc(incidents.openedAt)),
   ]);
   return {
-    sites: siteRows.map((r) => ({
-      ...r.site,
-      divisionName: r.divisionName,
-      divisionSort: r.divisionSort ?? 999,
-      isAffiliate: r.isAffiliate ?? false,
-    })),
+    sites: siteRows.map((r) => ({ ...r.site, divisionName: r.divisionName })),
+    divisions: divisionRows,
     nodes: nodeRows,
     openIncidents: incRows.map((r) => ({ ...r.incident, siteName: r.siteName })),
   };
@@ -148,7 +155,7 @@ export async function searchIncidents(
   if (status === 'active') where.push(inArray(incidents.status, [...OPEN_STATUSES]));
   else if (status !== 'all') where.push(eq(incidents.status, status as IncidentStatus));
   if (f.priorities?.length) where.push(inArray(incidents.priority, f.priorities));
-  if (f.division) where.push(eq(incidents.divisionCode, f.division));
+  if (f.division) where.push(sql`${f.division} = ANY(${incidents.divisionCodes})`);
   if (f.siteId)
     where.push(
       or(
@@ -170,10 +177,13 @@ export async function searchIncidents(
   if (f.beforeId && status !== 'active') where.push(lt(incidents.id, f.beforeId));
 
   const rows = await db
-    .select({ incident: incidents, siteName: sites.name, divisionName: divisions.name })
+    .select({
+      incident: incidents,
+      siteName: sites.name,
+      divisionName: divisionNames(incidents.divisionCodes),
+    })
     .from(incidents)
     .leftJoin(sites, eq(sites.id, incidents.primarySiteId))
-    .leftJoin(divisions, eq(divisions.code, incidents.divisionCode))
     .where(where.length ? and(...where) : undefined)
     .orderBy(
       ...(status === 'active'
@@ -198,10 +208,13 @@ export async function searchIncidents(
 
 export async function getIncidentDetail(db: DbOrTx, id: number, now = new Date()) {
   const [head] = await db
-    .select({ incident: incidents, site: sites, divisionName: divisions.name })
+    .select({
+      incident: incidents,
+      site: sites,
+      divisionName: divisionNames(incidents.divisionCodes),
+    })
     .from(incidents)
     .leftJoin(sites, eq(sites.id, incidents.primarySiteId))
-    .leftJoin(divisions, eq(divisions.code, incidents.divisionCode))
     .where(eq(incidents.id, id));
   if (!head) return null;
   const inc = head.incident;
@@ -370,9 +383,8 @@ export async function getIncidentDetail(db: DbOrTx, id: number, now = new Date()
 
 export async function getSiteDetail(db: DbOrTx, code: string, now = new Date()) {
   const [head] = await db
-    .select({ site: sites, divisionName: divisions.name })
+    .select({ site: sites, divisionName: divisionNames(sites.divisionCodes) })
     .from(sites)
-    .leftJoin(divisions, eq(divisions.code, sites.divisionCode))
     .where(eq(sql`lower(${sites.code})`, code.toLowerCase()));
   if (!head) return null;
   const siteId = head.site.id;

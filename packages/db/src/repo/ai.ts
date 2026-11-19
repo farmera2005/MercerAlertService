@@ -27,7 +27,6 @@ import {
   aiCalls,
   alertRecords,
   digests,
-  divisions,
   entityTransitions,
   incidentEvents,
   incidentMembers,
@@ -37,6 +36,7 @@ import {
   orionNodes,
   sites,
 } from '../schema';
+import { divisionNames } from './divisions';
 import type { Db, DbOrTx } from '../client';
 import { listSeasons } from './calendar';
 import { publishEvent } from './events-bus';
@@ -153,9 +153,8 @@ export async function dueAiIncidents(db: DbOrTx, now: Date, limit = 20): Promise
 /** Site profiles for the cached prompt prefix. */
 export async function loadSiteProfiles(db: DbOrTx): Promise<SiteProfile[]> {
   const rows = await db
-    .select({ site: sites, division: divisions.name })
+    .select({ site: sites, division: divisionNames(sites.divisionCodes) })
     .from(sites)
-    .leftJoin(divisions, eq(divisions.code, sites.divisionCode))
     .orderBy(asc(sites.code));
   return rows.map(({ site: s, division }) => ({
     code: s.code,
@@ -201,9 +200,8 @@ export async function loadAiIncidentSnapshot(
   if (!inc) return null;
   const [siteRow] = inc.primarySiteId
     ? await db
-        .select({ site: sites, division: divisions.name })
+        .select({ site: sites, division: divisionNames(sites.divisionCodes) })
         .from(sites)
-        .leftJoin(divisions, eq(divisions.code, sites.divisionCode))
         .where(eq(sites.id, inc.primarySiteId))
     : [];
   const affected = inc.affectedSiteIds.length

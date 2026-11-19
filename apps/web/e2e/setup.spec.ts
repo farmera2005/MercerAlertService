@@ -56,10 +56,19 @@ test('first-run setup is completed entirely in the browser', async ({ page }) =>
   await expect(page).toHaveURL(/\/setup\/sites$/);
   const unmatched = page.locator('form:has(input[name=value])');
   await expect(unmatched).toHaveCount(1);
-  await unmatched.first().locator('select[name=divisionCode]').selectOption('grain');
+  // A location can serve several divisions.
+  await unmatched.first().getByLabel('Grain', { exact: true }).check();
+  await unmatched.first().getByLabel('Agronomy', { exact: true }).check();
   await unmatched.first().getByRole('button', { name: 'Apply' }).click();
   await expect(unmatched).toHaveCount(0);
-  await expect(page.locator('summary', { hasText: 'Spencerville' })).toContainText('confirmed');
+  const spencerville = page.locator('summary', { hasText: 'Spencerville' });
+  await expect(spencerville).toContainText('confirmed');
+  await expect(spencerville).toContainText('Grain, Agronomy');
+  await spencerville.click();
+  const form = page.locator('details', { has: spencerville });
+  await expect(form.getByLabel('Grain', { exact: true })).toBeChecked();
+  await expect(form.getByLabel('Agronomy', { exact: true })).toBeChecked();
+  await expect(form.getByLabel('Feed', { exact: true })).not.toBeChecked();
 
   // General: validation, then save.
   await page.getByRole('link', { name: /Next: General/ }).click();

@@ -130,6 +130,15 @@ export async function runDiscoveryAction(_: DiscoverState): Promise<DiscoverStat
 // Sites
 // ---------------------------------------------------------------------------------------------
 
+/** Checked division codes (the repo keeps only known ones). */
+function divisionCodesFrom(form: FormData): string[] {
+  return form
+    .getAll('divisionCodes')
+    .map(String)
+    .filter((c) => /^[a-z0-9_]{1,40}$/.test(c))
+    .slice(0, 20);
+}
+
 function siteFromForm(form: FormData) {
   const num = (k: string) => {
     const v = String(form.get(k) ?? '').trim();
@@ -141,7 +150,7 @@ function siteFromForm(form: FormData) {
   };
   return {
     name: String(form.get('name') ?? '').trim(),
-    divisionCode: text('divisionCode'),
+    divisionCodes: divisionCodesFrom(form),
     city: text('city'),
     state: text('state'),
     lat: num('lat'),
@@ -179,8 +188,15 @@ export async function saveSiteAction(_: FormState, form: FormData): Promise<Form
   if (!actor) return NOT_SIGNED_IN;
   const s = siteFromForm(form);
   const errors = validateSite(s);
+  // Checkboxes repeat a name, which echo() would collapse to the last one.
+  const values = () => ({ ...echo(form), divisionCodes: s.divisionCodes.join(',') });
   if (Object.keys(errors).length)
-    return { ok: false, message: 'Please fix the highlighted fields.', errors, values: echo(form) };
+    return {
+      ok: false,
+      message: 'Please fix the highlighted fields.',
+      errors,
+      values: values(),
+    };
   const id = Number(form.get('id') ?? 0);
   const { db } = server();
   const linked = id ? (await siteGroupInfo(db.db, [id])).get(id) : undefined;
@@ -199,7 +215,7 @@ export async function saveSiteAction(_: FormState, form: FormData): Promise<Form
             ok: false,
             message: 'Notes can be at most 4,000 characters.',
             errors: { groupNotes: 'Too long.' },
-            values: echo(form),
+            values: values(),
           };
         notesMessage = await requestSiteNotesSave(id, text.trim(), base, actor);
       }
@@ -211,7 +227,7 @@ export async function saveSiteAction(_: FormState, form: FormData): Promise<Form
         ok: false,
         message: 'A site with that name already exists.',
         errors: { name: 'Already exists.' },
-        values: echo(form),
+        values: values(),
       };
     throw err;
   }
@@ -247,7 +263,7 @@ export async function mapOrionSiteValueAction(form: FormData): Promise<void> {
         aliases: [value],
         tier: 'standard',
         harvestCritical: false,
-        divisionCode: String(form.get('divisionCode') ?? '') || null,
+        divisionCodes: divisionCodesFrom(form),
       },
       actor,
     ).catch(() => {});

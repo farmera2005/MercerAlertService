@@ -45,27 +45,35 @@ describe('resolveNodeSite', () => {
       code: 'celina-hq',
       name: 'Celina HQ',
       aliases: ['CEL', 'Celina'],
-      divisionCode: 'corporate',
+      divisionCodes: ['corporate'],
     },
     {
       id: 2,
       code: 'rockford',
       name: 'Rockford Elevator',
       aliases: ['ROCK'],
-      divisionCode: 'grain',
+      divisionCodes: ['grain'],
     },
     {
       id: 3,
       code: 'mps-st-marys',
       name: 'MPS Feed St. Marys',
       aliases: ['MPS'],
-      divisionCode: 'mps_feed',
+      divisionCodes: ['mps_feed'],
+    },
+    {
+      id: 4,
+      code: 'fort-recovery',
+      name: 'Fort Recovery',
+      aliases: ['FTR'],
+      divisionCodes: ['grain', 'agronomy'],
     },
   ];
   const divisions = [
     { code: 'grain', name: 'Grain', aliases: [] },
     { code: 'feed', name: 'Feed', aliases: ['Feed Mill'] },
     { code: 'mps_feed', name: 'MPS Feed', aliases: ['MPS'] },
+    { code: 'agronomy', name: 'Agronomy', aliases: [] },
   ];
   const ctx = buildSiteResolutionContext(sites, divisions, new Map([[99, { siteId: 3 }]]), {
     siteField: 'Site',
@@ -86,6 +94,15 @@ describe('resolveNodeSite', () => {
       ctx,
     );
     expect(r.divisionCode).toBe('feed');
+  });
+  it('at a site with several divisions, uses the device’s own Division only', () => {
+    const shared = resolveNodeSite({ nodeId: 1, caption: 'FTR-SW01', customProperties: {} }, ctx);
+    expect(shared).toMatchObject({ siteId: 4, source: 'caption', divisionCode: null });
+    const own = resolveNodeSite(
+      { nodeId: 1, caption: 'FTR-SCALE1', customProperties: { Division: 'Agronomy' } },
+      ctx,
+    );
+    expect(own).toMatchObject({ siteId: 4, divisionCode: 'agronomy' });
   });
   it('reports unmatched values for auto-create and does not fall back to caption', () => {
     const r = resolveNodeSite(

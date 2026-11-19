@@ -9,7 +9,8 @@ import type { RoutingRule } from './types';
 export interface RouteSubject {
   priority: Priority;
   kind: IncidentKind;
-  divisionCode: string | null;
+  /** The incident's divisions; a rule for any of them matches. */
+  divisionCodes: readonly string[];
   siteId: number | null;
   affectedSiteIds: readonly number[];
   /** Within the primary site's business hours (harvest hours in harvest). */
@@ -32,7 +33,7 @@ export function ruleMatches(rule: RoutingRule, s: RouteSubject): boolean {
   const m = rule.match;
   if (!has(m.priorities, s.priority)) return false;
   if (!has(m.kinds, s.kind)) return false;
-  if (!has(m.divisions, s.divisionCode)) return false;
+  if (m.divisions?.length && !s.divisionCodes.some((d) => m.divisions!.includes(d))) return false;
   if (m.siteIds?.length) {
     const sites = [s.siteId, ...s.affectedSiteIds].filter((x): x is number => x !== null);
     if (!sites.some((id) => m.siteIds!.includes(id))) return false;

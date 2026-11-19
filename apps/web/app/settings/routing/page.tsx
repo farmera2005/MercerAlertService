@@ -43,12 +43,12 @@ export default async function RoutingSettings() {
   const preview = open.rows.map((i) => {
     const site = i.primarySiteId ? siteById.get(i.primarySiteId) : undefined;
     const hours = site
-      ? siteHours({ ...site, divisionName: null }, harvest)
+      ? siteHours(site, harvest)
       : { days: [1, 2, 3, 4, 5], start: '07:00', end: '17:00' };
     const r = routeIncident(asRules, {
       priority: i.priority,
       kind: i.kind,
-      divisionCode: i.divisionCode,
+      divisionCodes: i.divisionCodes,
       siteId: i.primarySiteId,
       affectedSiteIds: i.affectedSiteIds,
       withinBusinessHours: isWithinHours(now, hours, cfg.timezone),

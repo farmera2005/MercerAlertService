@@ -63,7 +63,7 @@ const HARVEST: BusinessHours = { days: [1, 2, 3, 4, 5, 6], start: '06:00', end: 
 type SeedSite = {
   code: string;
   name: string;
-  divisionCode: string;
+  divisionCodes: string[];
   city: string;
   state: string;
   lat: number | null;
@@ -79,7 +79,7 @@ const BASE_SITES: Array<Omit<SeedSite, 'businessHours' | 'harvestHours'>> = [
   {
     code: 'celina-hq',
     name: 'Celina HQ',
-    divisionCode: 'corporate',
+    divisionCodes: ['corporate'],
     city: 'Celina',
     state: 'OH',
     lat: 40.5489,
@@ -91,7 +91,7 @@ const BASE_SITES: Array<Omit<SeedSite, 'businessHours' | 'harvestHours'>> = [
   {
     code: 'rockford',
     name: 'Rockford Elevator',
-    divisionCode: 'grain',
+    divisionCodes: ['grain'],
     city: 'Rockford',
     state: 'OH',
     lat: 40.6928,
@@ -103,7 +103,7 @@ const BASE_SITES: Array<Omit<SeedSite, 'businessHours' | 'harvestHours'>> = [
   {
     code: 'coldwater',
     name: 'Coldwater Elevator',
-    divisionCode: 'grain',
+    divisionCodes: ['grain'],
     city: 'Coldwater',
     state: 'OH',
     lat: 40.4795,
@@ -115,7 +115,7 @@ const BASE_SITES: Array<Omit<SeedSite, 'businessHours' | 'harvestHours'>> = [
   {
     code: 'fort-recovery',
     name: 'Fort Recovery Elevator',
-    divisionCode: 'grain',
+    divisionCodes: ['grain'],
     city: 'Fort Recovery',
     state: 'OH',
     lat: 40.4131,
@@ -127,7 +127,7 @@ const BASE_SITES: Array<Omit<SeedSite, 'businessHours' | 'harvestHours'>> = [
   {
     code: 'st-henry',
     name: 'St. Henry Elevator',
-    divisionCode: 'grain',
+    divisionCodes: ['grain'],
     city: 'St. Henry',
     state: 'OH',
     lat: 40.4181,
@@ -139,7 +139,7 @@ const BASE_SITES: Array<Omit<SeedSite, 'businessHours' | 'harvestHours'>> = [
   {
     code: 'mendon',
     name: 'Mendon Elevator',
-    divisionCode: 'grain',
+    divisionCodes: ['grain'],
     city: 'Mendon',
     state: 'OH',
     lat: 40.6706,
@@ -151,7 +151,7 @@ const BASE_SITES: Array<Omit<SeedSite, 'businessHours' | 'harvestHours'>> = [
   {
     code: 'ohio-city',
     name: 'Ohio City Agronomy',
-    divisionCode: 'agronomy',
+    divisionCodes: ['agronomy'],
     city: 'Ohio City',
     state: 'OH',
     lat: 40.7706,
@@ -163,7 +163,7 @@ const BASE_SITES: Array<Omit<SeedSite, 'businessHours' | 'harvestHours'>> = [
   {
     code: 'van-wert',
     name: 'Van Wert Agronomy Center',
-    divisionCode: 'agronomy',
+    divisionCodes: ['agronomy'],
     city: 'Van Wert',
     state: 'OH',
     lat: 40.8695,
@@ -175,7 +175,7 @@ const BASE_SITES: Array<Omit<SeedSite, 'businessHours' | 'harvestHours'>> = [
   {
     code: 'wapakoneta',
     name: 'Wapakoneta Energy',
-    divisionCode: 'energy',
+    divisionCodes: ['energy'],
     city: 'Wapakoneta',
     state: 'OH',
     lat: 40.5678,
@@ -187,7 +187,7 @@ const BASE_SITES: Array<Omit<SeedSite, 'businessHours' | 'harvestHours'>> = [
   {
     code: 'celina-feed',
     name: 'Celina Feed Mill',
-    divisionCode: 'feed',
+    divisionCodes: ['feed'],
     city: 'Celina',
     state: 'OH',
     lat: 40.552,
@@ -199,7 +199,7 @@ const BASE_SITES: Array<Omit<SeedSite, 'businessHours' | 'harvestHours'>> = [
   {
     code: 'mps-st-marys',
     name: 'MPS Feed - St. Marys',
-    divisionCode: 'mps_feed',
+    divisionCodes: ['mps_feed'],
     city: 'St. Marys',
     state: 'OH',
     lat: 40.5423,
@@ -211,7 +211,7 @@ const BASE_SITES: Array<Omit<SeedSite, 'businessHours' | 'harvestHours'>> = [
   {
     code: 'heartland-feed',
     name: 'Heartland Feed Services',
-    divisionCode: 'heartland_feed',
+    divisionCodes: ['heartland_feed'],
     city: '',
     state: 'OH',
     lat: null,

@@ -21,14 +21,7 @@ import {
   type Priority,
   type StatusNorm,
 } from '@mercer/core';
-import {
-  divisions,
-  entityTransitions,
-  nodeMetrics5m,
-  orionNodes,
-  pollerState,
-  sites,
-} from '../schema';
+import { entityTransitions, nodeMetrics5m, orionNodes, pollerState, sites } from '../schema';
 import type { DbOrTx } from '../client';
 import {
   getIncidentDetail,
@@ -101,7 +94,7 @@ async function resolveSite(db: DbOrTx, text: string) {
 
 async function networkStatus(db: DbOrTx, division: string | null, tz: string): Promise<Json> {
   const o = await loadOverview(db);
-  const siteList = division ? o.sites.filter((s) => s.divisionCode === division) : o.sites;
+  const siteList = division ? o.sites.filter((s) => s.divisionCodes.includes(division)) : o.sites;
   const siteIds = new Set(siteList.map((s) => s.id));
   const open = o.openIncidents.filter(
     (i) => !division || (i.primarySiteId !== null && siteIds.has(i.primarySiteId)),
@@ -228,7 +221,7 @@ async function findSites(db: DbOrTx, text: string | null, division: string | nul
   const t = text?.toLowerCase();
   const list = o.sites.filter(
     (s) =>
-      (!division || s.divisionCode === division) &&
+      (!division || s.divisionCodes.includes(division)) &&
       (!t ||
         s.code.toLowerCase().includes(t) ||
         s.name.toLowerCase().includes(t) ||
@@ -277,15 +270,12 @@ async function siteDetail(db: DbOrTx, text: string, ctx: ChatToolContext): Promi
   if (!s) return { error: `No site matches "${text}".` };
   const d = await getSiteDetail(db, s.code, ctx.now);
   if (!d) return { error: `No site matches "${text}".` };
-  const [div] = d.site.divisionCode
-    ? await db.select().from(divisions).where(eq(divisions.code, d.site.divisionCode))
-    : [];
   const group = (await siteGroupInfo(db, [d.site.id])).get(d.site.id);
   return {
     ref: refOf('site', d.site.code.toUpperCase()),
     code: d.site.code,
     name: d.site.name,
-    division: div?.name ?? null,
+    division: d.divisionName,
     city: d.site.city,
     tier: d.site.tier,
     harvest_critical: d.site.harvestCritical,

@@ -29,8 +29,8 @@ const OFFICE = { days: [1, 2, 3, 4, 5], start: '07:00', end: '17:00' };
 const rockford: SiteInfo = {
   id: 2,
   name: 'Rockford Elevator',
-  divisionCode: 'grain',
-  divisionName: 'Grain',
+  divisionCodes: ['grain'],
+  divisionNames: ['Grain'],
   tier: 'high',
   harvestCritical: true,
   businessHours: OFFICE,
@@ -39,8 +39,8 @@ const rockford: SiteInfo = {
 const hq: SiteInfo = {
   id: 1,
   name: 'Celina HQ',
-  divisionCode: 'corporate',
-  divisionName: 'Corporate',
+  divisionCodes: ['corporate'],
+  divisionNames: ['Corporate'],
   tier: 'critical',
   harvestCritical: false,
   businessHours: OFFICE,
@@ -50,7 +50,8 @@ const standard: SiteInfo = {
   ...rockford,
   id: 3,
   name: 'Ohio City',
-  divisionCode: 'agronomy',
+  divisionCodes: ['agronomy'],
+  divisionNames: ['Agronomy'],
   tier: 'standard',
   harvestCritical: false,
 };
@@ -138,11 +139,40 @@ describe('scoreIncident', () => {
     expect(scoreIncident(base({ kind: 'monitoring_source_down', site: null })).priority).toBe('P1');
   });
   it('applies the grain multiplier to grain sites that are not harvest-critical', () => {
-    const grainStd = { ...standard, divisionCode: 'grain' };
+    const grainStd = { ...standard, divisionCodes: ['grain'] };
     expect(
       scoreIncident(base({ downRoles: ['switch'], affectedNodes: 1, site: grainStd })).factors
         .seasonMult,
     ).toBe(1.2);
+    const shared = { ...standard, divisionCodes: ['agronomy', 'grain'] };
+    expect(
+      scoreIncident(base({ downRoles: ['switch'], affectedNodes: 1, site: shared })).factors
+        .seasonMult,
+    ).toBe(1.2);
+  });
+  it('applies a season for one division to a site that has it among others', () => {
+    const spring: SeasonPeriod = {
+      ...HARVEST,
+      id: 2,
+      name: 'Spring application',
+      kind: 'high_risk',
+      startMd: '03-01',
+      endMd: '05-31',
+      multiplier: 1.3,
+      divisions: ['agronomy'],
+    };
+    const at = (codes: string[]) =>
+      scoreIncident(
+        base({
+          downRoles: ['switch'],
+          affectedNodes: 1,
+          site: { ...standard, divisionCodes: codes },
+          seasons: [spring],
+          now: new Date('2026-04-15T14:00:00Z'),
+        }),
+      ).factors.seasonMult;
+    expect(at(['grain', 'agronomy'])).toBe(1.3);
+    expect(at(['grain'])).toBe(1);
   });
 });
 

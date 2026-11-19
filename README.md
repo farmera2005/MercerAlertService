@@ -83,7 +83,9 @@ Everything updates by itself (Server-Sent Events); the dot next to your name say
 
 - **Overview:** open incidents by priority, the **noise-reduction ratio** (raw Orion alerts per
   incident), SolarWinds status and poll ages, every site as a green / amber / red tile grouped
-  by division (the reason is under each tile), and the map.
+  by division (the reason is under each tile), and the map. A site can have several divisions,
+  such as a grain elevator with an agronomy center (Settings → Sites). It then appears under
+  each one, and its incidents follow the routing rules and seasons of all of them.
 - **Incidents:** filter by status, time, priority, division, site and kind, or search a title
   or `INC-123`. Each incident shows its summary, the alerts it grouped, a timeline merging
   Orion and MAS, why it has its priority, its recovery target, and buttons to **Acknowledge**,

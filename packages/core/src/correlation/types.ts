@@ -75,7 +75,8 @@ export interface IncidentState {
   baseScore: number;
   priorityFactors: PriorityFactors;
   primarySiteId: number | null;
-  divisionCode: string | null;
+  /** The primary site's divisions. */
+  divisionCodes: string[];
   affectedSiteIds: number[];
   rootNodeId: number | null;
   rootEntityUri: string | null;
@@ -121,8 +122,8 @@ export interface BusinessHours {
 export interface SiteInfo {
   id: number;
   name: string;
-  divisionCode: string | null;
-  divisionName: string | null;
+  divisionCodes: string[];
+  divisionNames: string[];
   tier: 'critical' | 'high' | 'standard';
   harvestCritical: boolean;
   businessHours: BusinessHours;

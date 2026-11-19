@@ -51,7 +51,10 @@ export function isHarvest(seasons: readonly SeasonPeriod[], now: Date, timeZone:
 }
 
 /** Business hours for a site at `now` (harvest hours apply to harvest-critical sites in harvest). */
-export function siteHours(site: SiteInfo, harvest: boolean): BusinessHours {
+export function siteHours(
+  site: Pick<SiteInfo, 'harvestCritical' | 'harvestHours' | 'businessHours'>,
+  harvest: boolean,
+): BusinessHours {
   return harvest && site.harvestCritical && site.harvestHours
     ? site.harvestHours
     : site.businessHours;

@@ -165,11 +165,10 @@ export function scoreIncident(i: ScoreInput): ScoreResult {
     let m = 1;
     if (s.kind === 'harvest') {
       if (i.site?.harvestCritical) m = s.multiplier;
-      else if (i.site?.divisionCode === 'grain') m = i.cfg.harvestGrainMult;
+      else if (i.site?.divisionCodes.includes('grain')) m = i.cfg.harvestGrainMult;
     } else {
       const divOk =
-        !s.divisions?.length ||
-        (i.site?.divisionCode != null && s.divisions.includes(i.site.divisionCode));
+        !s.divisions?.length || s.divisions.some((d) => i.site?.divisionCodes.includes(d));
       const hcOk = !s.harvestCriticalOnly || !!i.site?.harvestCritical;
       if (divOk && hcOk) m = s.multiplier;
     }

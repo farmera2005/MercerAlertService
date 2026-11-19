@@ -35,7 +35,6 @@ import {
 } from '@mercer/core';
 import {
   alertRecords,
-  divisions,
   entityTransitions,
   incidentEvents,
   incidentMembers,
@@ -49,6 +48,7 @@ import {
   sites,
   topologyConnections,
 } from '../schema';
+import { divisionNameList } from './divisions';
 import type { DbOrTx, Tx } from '../client';
 import { inSequence } from './helpers';
 
@@ -104,7 +104,7 @@ function toIncident(r: IncidentRow, members: Map<string, MemberRole>): IncidentS
     baseScore: r.baseScore,
     priorityFactors: r.priorityFactors,
     primarySiteId: r.primarySiteId,
-    divisionCode: r.divisionCode,
+    divisionCodes: r.divisionCodes,
     affectedSiteIds: r.affectedSiteIds,
     rootNodeId: r.rootNodeId,
     rootEntityUri: r.rootEntityUri,
@@ -141,7 +141,7 @@ function incidentValues(i: IncidentState) {
     baseScore: i.baseScore,
     priorityFactors: i.priorityFactors,
     primarySiteId: i.primarySiteId,
-    divisionCode: i.divisionCode,
+    divisionCodes: i.divisionCodes,
     affectedSiteIds: i.affectedSiteIds,
     rootNodeId: i.rootNodeId,
     rootEntityUri: i.rootEntityUri,
@@ -224,10 +224,7 @@ export async function loadCorrelationSnapshot(
         })
         .from(orionNodes)
         .where(isNull(orionNodes.removedAt)),
-      db
-        .select({ site: sites, divisionName: divisions.name })
-        .from(sites)
-        .leftJoin(divisions, eq(divisions.code, sites.divisionCode)),
+      db.select({ site: sites, divisionNames: divisionNameList(sites.divisionCodes) }).from(sites),
       db.select().from(orionDependencies),
       db
         .select({ containerId: orionGroupMembers.containerId, nodeId: orionGroupMembers.nodeId })
@@ -264,13 +261,13 @@ export async function loadCorrelationSnapshot(
     ]),
   );
   const siteMap = new Map<number, SiteInfo>(
-    siteRows.map(({ site: s, divisionName }) => [
+    siteRows.map(({ site: s, divisionNames }) => [
       s.id,
       {
         id: s.id,
         name: s.name,
-        divisionCode: s.divisionCode,
-        divisionName,
+        divisionCodes: s.divisionCodes,
+        divisionNames,
         tier: s.tier,
         harvestCritical: s.harvestCritical,
         businessHours: s.businessHours,

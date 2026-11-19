@@ -56,8 +56,8 @@ const sites = new Map<number, SiteInfo>([
     {
       id: 1,
       name: 'Celina HQ',
-      divisionCode: 'corporate',
-      divisionName: 'Corporate',
+      divisionCodes: ['corporate'],
+      divisionNames: ['Corporate'],
       tier: 'critical',
       harvestCritical: false,
       businessHours: OFFICE,
@@ -69,8 +69,8 @@ const sites = new Map<number, SiteInfo>([
     {
       id: 2,
       name: 'Rockford Elevator',
-      divisionCode: 'grain',
-      divisionName: 'Grain',
+      divisionCodes: ['grain'],
+      divisionNames: ['Grain'],
       tier: 'high',
       harvestCritical: true,
       businessHours: OFFICE,
@@ -82,8 +82,8 @@ const sites = new Map<number, SiteInfo>([
     {
       id: 3,
       name: 'Coldwater Elevator',
-      divisionCode: 'grain',
-      divisionName: 'Grain',
+      divisionCodes: ['grain'],
+      divisionNames: ['Grain'],
       tier: 'high',
       harvestCritical: true,
       businessHours: OFFICE,
@@ -126,6 +126,7 @@ class World {
   changes = new Map<string, StateChange[]>();
   maintenance: MaintenanceWindow[] = [];
   seasons: SeasonPeriod[] = [HARVEST];
+  sites = new Map(sites);
   now: Date;
   private nextId = 1;
   private tid = 1;
@@ -221,7 +222,7 @@ class World {
       config: cfg,
       transitions: this.pending,
       nodes: this.nodes,
-      sites,
+      sites: this.sites,
       graph: this.graph,
       seasons: this.seasons,
       maintenance: this.maintenance,
@@ -323,6 +324,19 @@ describe('correlation engine', () => {
     expect(roles.filter((r) => r === 'root')).toHaveLength(2); // the FW alert + its status record
     expect(roles.filter((r) => r === 'symptom').length).toBeGreaterThanOrEqual(30);
     expect(out.events.filter((e) => e.type === 'opened')).toHaveLength(0); // opened in the first run
+  });
+
+  it('gives an incident every division of its site', () => {
+    const w = new World('2026-10-14T14:00:00Z');
+    w.sites.set(2, {
+      ...sites.get(2)!,
+      divisionCodes: ['grain', 'agronomy'],
+      divisionNames: ['Grain', 'Agronomy'],
+    });
+    wanDown(w);
+    const inc = w.open()[0]!;
+    expect(inc.divisionCodes).toEqual(['grain', 'agronomy']);
+    expect(inc.templateSummary).toMatch(/Rockford Elevator \(Grain, Agronomy\)/);
   });
 
   it('scores the same outage in March after hours as P2', () => {

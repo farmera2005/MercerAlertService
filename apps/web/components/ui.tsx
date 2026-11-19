@@ -154,6 +154,45 @@ export function Alert({
   );
 }
 
+/** A row of checkbox chips submitted under one name (one value per checked box). */
+export function Checks({
+  name,
+  values,
+  selected,
+  label,
+  help,
+}: {
+  name: string;
+  values: Array<[string, string]>;
+  selected: Array<string | number>;
+  label: string;
+  help?: ReactNode;
+}) {
+  return (
+    <fieldset className="text-sm">
+      <legend className="mb-1.5 text-sm font-medium text-slate-200">{label}</legend>
+      <div className="flex flex-wrap gap-1.5">
+        {values.map(([v, l]) => (
+          <label
+            key={v}
+            className="flex cursor-pointer items-center gap-1.5 rounded-md border border-white/15 px-2 py-1 text-slate-200 has-[:checked]:border-sky-400 has-[:checked]:bg-sky-500/10"
+          >
+            <input
+              type="checkbox"
+              name={name}
+              value={v}
+              defaultChecked={selected.map(String).includes(v)}
+              className="accent-sky-400"
+            />
+            {l}
+          </label>
+        ))}
+      </div>
+      {help && <p className="mt-1.5 text-xs text-slate-400">{help}</p>}
+    </fieldset>
+  );
+}
+
 export function FieldShell({
   id,
   label,

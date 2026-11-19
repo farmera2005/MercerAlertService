@@ -96,7 +96,7 @@ export function incidentTitle(i: TemplateInput): string {
 export function incidentSummary(i: TemplateInput): string {
   const s: string[] = [];
   const siteName = i.site?.name ?? 'an unmapped site';
-  const division = i.site?.divisionName ? ` (${i.site.divisionName})` : '';
+  const division = i.site?.divisionNames.length ? ` (${i.site.divisionNames.join(', ')})` : '';
   const affected = [...i.downNodes, ...i.unreachableNodes].filter(
     (n) => n.nodeId !== i.rootNode?.nodeId,
   );

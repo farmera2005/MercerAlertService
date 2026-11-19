@@ -43,7 +43,11 @@ export const sites = pgTable('sites', {
   id: serial('id').primaryKey(),
   code: text('code').notNull().unique(),
   name: text('name').notNull(),
-  divisionCode: text('division_code').references(() => divisions.code, { onUpdate: 'cascade' }),
+  /** Divisions served here (a grain elevator with an agronomy center has two); divisions order. */
+  divisionCodes: text('division_codes')
+    .array()
+    .notNull()
+    .default(sql`'{}'::text[]`),
   city: text('city'),
   state: text('state'),
   lat: doublePrecision('lat'),

@@ -64,6 +64,13 @@
       "when": 1795114135638,
       "tag": "0008_site_group_decisions",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1795116614071,
+      "tag": "0009_site_divisions",
+      "breakpoints": true
     }
   ]
 }

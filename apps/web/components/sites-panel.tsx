@@ -7,13 +7,13 @@ import {
   saveSiteAction,
   type FormState,
 } from '@/app/actions/settings';
-import { Alert, Badge, Button, Card, FieldShell, Input, Select, Textarea } from './ui';
+import { Alert, Badge, Button, Card, Checks, FieldShell, Input, Select, Textarea } from './ui';
 
 export interface SiteView {
   id: number;
   code: string;
   name: string;
-  divisionCode: string | null;
+  divisionCodes: string[];
   city: string | null;
   state: string | null;
   lat: number | null;
@@ -154,35 +154,23 @@ function SiteForm({
     <form action={action} className="space-y-4" noValidate>
       {site && <input type="hidden" name="id" value={site.id} />}
       <div className="grid gap-4 sm:grid-cols-3">
-        <FieldShell
-          id={`${id}-name`}
-          label="Name"
-          error={e.name}
-          help={site?.group ? 'Follows the SolarWinds group name.' : undefined}
-        >
-          <Input
+        <div className="sm:col-span-2">
+          <FieldShell
             id={`${id}-name`}
-            name="name"
-            defaultValue={dv('name', site?.name)}
-            readOnly={!!site?.group}
-            className={site?.group ? 'text-slate-400' : undefined}
-            required
-          />
-        </FieldShell>
-        <FieldShell id={`${id}-div`} label="Division">
-          <Select
-            id={`${id}-div`}
-            name="divisionCode"
-            defaultValue={dv('divisionCode', site?.divisionCode)}
+            label="Name"
+            error={e.name}
+            help={site?.group ? 'Follows the SolarWinds group name.' : undefined}
           >
-            <option value="">(unassigned)</option>
-            {divisions.map((d) => (
-              <option key={d.code} value={d.code}>
-                {d.name}
-              </option>
-            ))}
-          </Select>
-        </FieldShell>
+            <Input
+              id={`${id}-name`}
+              name="name"
+              defaultValue={dv('name', site?.name)}
+              readOnly={!!site?.group}
+              className={site?.group ? 'text-slate-400' : undefined}
+              required
+            />
+          </FieldShell>
+        </div>
         <FieldShell id={`${id}-tier`} label="Tier" help="Critical sites are paged first.">
           <Select id={`${id}-tier`} name="tier" defaultValue={dv('tier', site?.tier ?? 'standard')}>
             <option value="critical">Critical</option>
@@ -190,6 +178,19 @@ function SiteForm({
             <option value="standard">Standard</option>
           </Select>
         </FieldShell>
+        <div className="sm:col-span-3">
+          <Checks
+            name="divisionCodes"
+            label="Divisions"
+            values={divisions.map((d) => [d.code, d.name])}
+            selected={
+              v && 'divisionCodes' in v
+                ? v.divisionCodes!.split(',').filter(Boolean)
+                : (site?.divisionCodes ?? [])
+            }
+            help="Every division at this location. Incidents here go to each division’s routing rules and seasons."
+          />
+        </div>
         <FieldShell id={`${id}-city`} label="City">
           <Input id={`${id}-city`} name="city" defaultValue={dv('city', site?.city)} />
         </FieldShell>
@@ -326,22 +327,17 @@ export function SitesPanel({
                       </option>
                     ))}
                   </Select>
-                  <Select
-                    name="divisionCode"
-                    defaultValue=""
-                    className="w-48"
-                    aria-label="Division for a new site"
-                  >
-                    <option value="">Division (for new)</option>
-                    {divisions.map((d) => (
-                      <option key={d.code} value={d.code}>
-                        {d.name}
-                      </option>
-                    ))}
-                  </Select>
                   <Button type="submit" variant="secondary">
                     Apply
                   </Button>
+                  <div className="basis-full">
+                    <Checks
+                      name="divisionCodes"
+                      label="Divisions (for a new site)"
+                      values={divisions.map((d) => [d.code, d.name])}
+                      selected={[]}
+                    />
+                  </div>
                 </form>
               </li>
             ))}
@@ -360,7 +356,7 @@ export function SitesPanel({
                 <summary className="flex cursor-pointer flex-wrap items-center gap-3 text-sm">
                   <span className="font-medium text-slate-100">{s.name}</span>
                   <span className="text-slate-400">
-                    {s.divisionCode ? divName.get(s.divisionCode) : 'no division'}
+                    {s.divisionCodes.map((c) => divName.get(c) ?? c).join(', ') || 'no division'}
                   </span>
                   <Badge
                     tone={s.tier === 'critical' ? 'bad' : s.tier === 'high' ? 'warn' : 'neutral'}

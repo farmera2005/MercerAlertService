@@ -19,8 +19,8 @@ async function examples() {
   const grain: SiteInfo = {
     id: 0,
     name: 'a harvest-critical elevator',
-    divisionCode: 'grain',
-    divisionName: 'Grain',
+    divisionCodes: ['grain'],
+    divisionNames: ['Grain'],
     tier: 'high',
     harvestCritical: true,
     businessHours: OFFICE,
@@ -29,14 +29,16 @@ async function examples() {
   const agro: SiteInfo = {
     ...grain,
     name: 'a standard agronomy site',
-    divisionCode: 'agronomy',
+    divisionCodes: ['agronomy'],
+    divisionNames: ['Agronomy'],
     tier: 'standard',
     harvestCritical: false,
   };
   const hq: SiteInfo = {
     ...grain,
     name: 'HQ',
-    divisionCode: 'corporate',
+    divisionCodes: ['corporate'],
+    divisionNames: ['Corporate'],
     tier: 'critical',
     harvestCritical: false,
   };

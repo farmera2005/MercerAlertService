@@ -21,7 +21,8 @@ export interface SiteTile {
   code: string;
   name: string;
   city: string | null;
-  divisionCode: string | null;
+  divisionCodes: string[];
+  /** The site's division names, joined ("Grain, Agronomy"). */
   divisionName: string;
   tier: string;
   harvestCritical: boolean;
@@ -51,8 +52,9 @@ export interface OverviewModel {
 
 /**
  * Site tiles for the overview, the sites list and the wall: every Site Profile with its health,
- * grouped by division (affiliates last). Sites without monitored devices are dropped unless they
- * have an open incident, so placeholders do not clutter the wall.
+ * grouped by division (affiliates last). A site with several divisions is in each of their groups.
+ * Sites without monitored devices are dropped unless they have an open incident, so placeholders
+ * do not clutter the wall.
  */
 export async function overviewModel(now = new Date()): Promise<OverviewModel> {
   const { db } = server();
@@ -72,7 +74,7 @@ export async function overviewModel(now = new Date()): Promise<OverviewModel> {
     nodesBySite.set(n.siteId, list);
   }
 
-  const tiles: Array<SiteTile & { affiliate: boolean; sort: number }> = [];
+  const tiles: SiteTile[] = [];
   for (const s of data.sites) {
     const nodes = nodesBySite.get(s.id) ?? [];
     const incidents = data.openIncidents.filter(
@@ -95,7 +97,7 @@ export async function overviewModel(now = new Date()): Promise<OverviewModel> {
       code: s.code,
       name: s.name,
       city: s.city,
-      divisionCode: s.divisionCode,
+      divisionCodes: s.divisionCodes,
       divisionName: s.divisionName ?? 'No division',
       tier: s.tier,
       harvestCritical: s.harvestCritical,
@@ -110,24 +112,30 @@ export async function overviewModel(now = new Date()): Promise<OverviewModel> {
         title: displayTitle(i),
         summary: shortSummary(i),
       })),
-      affiliate: s.isAffiliate,
-      sort: s.divisionSort,
     });
   }
 
+  const divisionByCode = new Map(data.divisions.map((d) => [d.code, d]));
+  const firstSort = (t: SiteTile) =>
+    Math.min(999, ...t.divisionCodes.map((c) => divisionByCode.get(c)?.sortOrder ?? 999));
+  tiles.sort((a, b) => firstSort(a) - firstSort(b) || a.name.localeCompare(b.name));
   const groups = new Map<string, DivisionGroup & { sort: number }>();
   for (const t of tiles) {
-    const key = t.divisionCode ?? '';
-    const g = groups.get(key) ?? {
-      code: t.divisionCode,
-      name: t.divisionName,
-      isAffiliate: t.affiliate,
-      level: 'unknown' as HealthLevel,
-      sites: [],
-      sort: t.sort,
-    };
-    g.sites.push(t);
-    groups.set(key, g);
+    const known = t.divisionCodes.filter((c) => divisionByCode.has(c));
+    for (const code of known.length ? known : [null]) {
+      const d = code ? divisionByCode.get(code)! : null;
+      const key = code ?? '';
+      const g = groups.get(key) ?? {
+        code,
+        name: d?.name ?? 'No division',
+        isAffiliate: d?.isAffiliate ?? false,
+        level: 'unknown' as HealthLevel,
+        sites: [],
+        sort: d?.sortOrder ?? 999,
+      };
+      g.sites.push(t);
+      groups.set(key, g);
+    }
   }
   const ordered = [...groups.values()]
     .map((g) => ({ ...g, level: worstLevel(g.sites.map((s) => s.health.level)) }))

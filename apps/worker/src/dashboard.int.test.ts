@@ -19,6 +19,7 @@ import {
   seedReferenceData,
   touchKioskToken,
   updateKioskToken,
+  updateSite,
   upsertEntraUser,
   CORRELATION_LOCK_KEY,
   type DbHandle,
@@ -135,6 +136,34 @@ describe.skipIf(!url)('dashboard data and incident actions (integration)', () =>
     expect((await searchIncidents(h.db, { status: 'resolved' })).rows).toHaveLength(0);
     const paged = await searchIncidents(h.db, { status: 'all', limit: 1 });
     expect(paged.nextBeforeId).not.toBeNull();
+  });
+
+  it('stores several divisions per site, and filters and names incidents by any of them', async () => {
+    const [rock] = await q<{ id: number }>(`select id from sites where name='Rockford Elevator'`);
+    const saved = await updateSite(
+      h.db,
+      rock!.id,
+      { divisionCodes: ['agronomy', 'grain', 'nope'] },
+      actor,
+    );
+    // Known codes only, in divisions order.
+    expect(saved?.divisionCodes).toEqual(['grain', 'agronomy']);
+    const o = await loadOverview(h.db);
+    expect(o.sites.find((x) => x.id === rock!.id)!.divisionName).toBe('Grain, Agronomy');
+
+    // An incident at the site carries its divisions (set by correlation; see engine tests).
+    await h.pool.query(`update incidents set division_codes = '{grain,agronomy}' where id = $1`, [
+      p1Id,
+    ]);
+    const agronomy = await searchIncidents(h.db, { status: 'active', division: 'agronomy' });
+    expect(agronomy.rows.map((r) => r.id)).toEqual([p1Id]);
+    expect(agronomy.rows[0]!.divisionName).toBe('Grain, Agronomy');
+    const feed = await searchIncidents(h.db, { status: 'active', division: 'feed' });
+    expect(feed.rows.map((r) => r.id)).not.toContain(p1Id);
+    expect((await getIncidentDetail(h.db, p1Id))!.divisionName).toBe('Grain, Agronomy');
+
+    await updateSite(h.db, rock!.id, { divisionCodes: ['grain'] }, actor);
+    await h.pool.query(`update incidents set division_codes = '{grain}' where id = $1`, [p1Id]);
   });
 
   it('builds the incident detail with members, affected devices and a merged timeline', async () => {

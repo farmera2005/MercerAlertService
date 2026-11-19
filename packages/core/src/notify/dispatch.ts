@@ -85,7 +85,7 @@ function routeFor(inc: NotifyIncident, ctx: DispatchContext): RouteResult {
   return routeIncident(ctx.rules, {
     priority: inc.priority,
     kind: inc.kind,
-    divisionCode: inc.divisionCode,
+    divisionCodes: inc.divisionCodes,
     siteId: inc.siteId,
     affectedSiteIds: inc.affectedSiteIds,
     withinBusinessHours: ctx.withinBusinessHours,

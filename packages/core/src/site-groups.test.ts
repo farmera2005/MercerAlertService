@@ -160,8 +160,8 @@ describe('planSiteGroupLinks', () => {
 
 describe('resolveNodeSite with site groups', () => {
   const sites = [
-    { id: 1, code: 'rockford', name: 'Rockford Elevator', aliases: [], divisionCode: 'grain' },
-    { id: 2, code: 'celina', name: 'Celina HQ', aliases: [], divisionCode: 'corporate' },
+    { id: 1, code: 'rockford', name: 'Rockford Elevator', aliases: [], divisionCodes: ['grain'] },
+    { id: 2, code: 'celina', name: 'Celina HQ', aliases: [], divisionCodes: ['corporate'] },
   ];
   const ctx = buildSiteResolutionContext(
     sites,

@@ -3,7 +3,7 @@
 import { deleteRuleAction, moveRuleAction, saveRuleAction } from '@/app/actions/notify';
 import { StatefulForm } from '../stateful-form';
 import { KIND_LABEL } from '../status';
-import { Badge, Button, FieldShell, Input, Select } from '../ui';
+import { Badge, Button, Checks, FieldShell, Input, Select } from '../ui';
 
 export interface RuleView {
   id: number;
@@ -30,41 +30,6 @@ interface Options {
 
 const PRIORITIES = ['P1', 'P2', 'P3', 'P4'];
 const HOURS = { any: 'Any time', business: 'In business hours', after: 'After business hours' };
-
-function Checks({
-  name,
-  values,
-  selected,
-  label,
-}: {
-  name: string;
-  values: Array<[string, string]>;
-  selected: Array<string | number>;
-  label: string;
-}) {
-  return (
-    <fieldset className="text-sm">
-      <legend className="mb-1.5 text-sm font-medium text-slate-200">{label}</legend>
-      <div className="flex flex-wrap gap-1.5">
-        {values.map(([v, l]) => (
-          <label
-            key={v}
-            className="flex cursor-pointer items-center gap-1.5 rounded-md border border-white/15 px-2 py-1 text-slate-200 has-[:checked]:border-sky-400 has-[:checked]:bg-sky-500/10"
-          >
-            <input
-              type="checkbox"
-              name={name}
-              value={v}
-              defaultChecked={selected.map(String).includes(v)}
-              className="accent-sky-400"
-            />
-            {l}
-          </label>
-        ))}
-      </div>
-    </fieldset>
-  );
-}
 
 function RuleForm({ rule, opts }: { rule: RuleView | null; opts: Options }) {
   const id = rule ? `rule-${rule.id}` : 'rule-new';
