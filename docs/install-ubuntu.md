@@ -73,7 +73,8 @@ the Orion account usually takes longer, so request those first (§0).
   offline map image (Settings → Map & wall). If the VM can reach the internet only through a
   web proxy, read §13 before §2.
 
-- **Someone who can add a deploy key** to the GitHub repository (§3).
+- **Someone who can add a deploy key** to the GitHub repository,
+  [farmera2005/MercerAlertService](https://github.com/farmera2005/MercerAlertService) (§3).
 
 ---
 
@@ -188,7 +189,16 @@ Sign out and back in for the group to take effect. The rest of this guide assume
 
 ## 3. Get the code
 
-The repository is private, so the VM uses a read-only **deploy key**.
+The code is in the private GitHub repository
+**[farmera2005/MercerAlertService](https://github.com/farmera2005/MercerAlertService)**:
+
+| What           | Value                                               |
+| -------------- | --------------------------------------------------- |
+| Web page       | `https://github.com/farmera2005/MercerAlertService` |
+| Clone over SSH | `git@github.com:farmera2005/MercerAlertService.git` |
+| Default branch | `claude/solarwinds-alert-correlation-90rlgx`        |
+
+Because the repository is private, the VM uses a read-only **deploy key**.
 
 Create the key on the VM:
 
@@ -200,8 +210,11 @@ ssh-keygen -t ed25519 -N '' -C 'mas-vm deploy key' -f ~/.ssh/mas_deploy
 cat ~/.ssh/mas_deploy.pub
 ```
 
-In GitHub, open the repository → **Settings → Deploy keys → Add deploy key**, paste the public
-key, and leave **Allow write access** unchecked. Then tell SSH to use the key for GitHub:
+Add it in GitHub under the repository's
+[Settings → Deploy keys](https://github.com/farmera2005/MercerAlertService/settings/keys) →
+**Add deploy key**. This needs admin rights on the repository. Paste the public key, name it
+after the VM, and leave **Allow write access** unchecked. Then tell SSH to use the key for
+GitHub:
 
 ```bash
 printf 'Host github-mas\n  HostName github.com\n  User git\n  IdentityFile ~/.ssh/mas_deploy\n  IdentitiesOnly yes\n' >> ~/.ssh/config
@@ -210,7 +223,19 @@ printf 'Host github-mas\n  HostName github.com\n  User git\n  IdentityFile ~/.ss
 If outbound port 22 is blocked, use GitHub's SSH-over-HTTPS endpoint instead: in that block,
 set `HostName ssh.github.com` and add `Port 443`.
 
-Clone into `/opt/mercer-alert-service` and check out the branch or tag approved for production:
+Check that the key works:
+
+```bash
+ssh -T github-mas
+```
+
+The first time, SSH asks you to confirm GitHub's host key. Compare the fingerprint with
+[GitHub's published fingerprints](https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/githubs-ssh-key-fingerprints)
+before answering `yes`. A working key gets the answer `Hi farmera2005/MercerAlertService!
+You've successfully authenticated, but GitHub does not provide shell access.`
+
+Clone into `/opt/mercer-alert-service`. `github-mas` is the SSH alias above, standing in for
+`git@github.com`:
 
 ```bash
 sudo install -d -o $USER -g $USER /opt/mercer-alert-service
@@ -220,8 +245,11 @@ sudo install -d -o $USER -g $USER /opt/mercer-alert-service
 git clone github-mas:farmera2005/MercerAlertService.git /opt/mercer-alert-service
 ```
 
+The clone checks out the default branch, which holds the current version; there are no release
+tags yet. Once releases are tagged, pin production to one, for example:
+
 ```bash
-cd /opt/mercer-alert-service && git checkout <branch-or-tag>
+cd /opt/mercer-alert-service && git checkout v1.0.0
 ```
 
 The rest of this guide runs commands from `/opt/mercer-alert-service`.
@@ -579,16 +607,16 @@ which stays stopped until you run `docker compose up -d`.
    docker compose exec backup /backup.sh now
    ```
 
-2. Fetch and check out the new version:
-
-   ```bash
-   git fetch --tags && git checkout <branch-or-tag>
-   ```
-
-   When following a branch rather than a tag, also bring it up to date:
+2. Get the new version. While production follows the default branch (the setup in §3):
 
    ```bash
    git pull --ff-only
+   ```
+
+   Once production is pinned to release tags, check out the new tag instead:
+
+   ```bash
+   git fetch --tags && git checkout v1.1.0
    ```
 
 3. Rebuild and restart. This also applies database migrations:

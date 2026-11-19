@@ -47,8 +47,13 @@ Requirements:
   `*.powerplatform.com`), `api.pushover.net` and `api.twilio.com` for notifications, and
   `api.anthropic.com` for AI summaries and digests (optional).
 
+The code is in the private repository
+[farmera2005/MercerAlertService](https://github.com/farmera2005/MercerAlertService). The VM
+needs read access, for example a deploy key; the
+[install guide §3](docs/install-ubuntu.md#3-get-the-code) shows how.
+
 ```bash
-git clone <repo> /opt/mercer-alert-service && cd /opt/mercer-alert-service
+git clone git@github.com:farmera2005/MercerAlertService.git /opt/mercer-alert-service && cd /opt/mercer-alert-service
 docker compose up -d --build
 docker compose logs web | grep -i "setup code"
 ```
