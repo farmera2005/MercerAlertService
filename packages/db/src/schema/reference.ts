@@ -120,3 +120,18 @@ export const siteNotesWrites = pgTable(
   },
   (t) => [index('site_notes_writes_site_idx').on(t.siteId, t.createdAt)],
 );
+
+export const siteGroupDecision = pgEnum('site_group_decision', ['site', 'not_site']);
+
+/**
+ * An admin's decision about one SolarWinds group ("Use as a site" / "Not a site" on Settings →
+ * Mapping). It wins over automatic detection and the manual parent/pattern settings.
+ */
+export const siteGroupDecisions = pgTable('site_group_decisions', {
+  containerId: integer('container_id').primaryKey(),
+  decision: siteGroupDecision('decision').notNull(),
+  /** The group's name when decided, for display if the group later disappears. */
+  groupName: text('group_name').notNull(),
+  decidedBy: text('decided_by').notNull(),
+  decidedAt: ts('decided_at').notNull().defaultNow(),
+});

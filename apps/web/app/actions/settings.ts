@@ -3,12 +3,21 @@
 import { revalidatePath } from 'next/cache';
 import { redirect } from 'next/navigation';
 import {
+  errorMessage,
+  GROUPS_POLL_QUEUE,
   isSecretSetting,
   normalizeKey,
   settingsForSection,
   type SettingSection,
 } from '@mercer/core';
-import { addSiteAlias, createSite, deleteSite, siteGroupInfo, updateSite } from '@mercer/db';
+import {
+  addSiteAlias,
+  createSite,
+  deleteSite,
+  setSiteGroupDecision,
+  siteGroupInfo,
+  updateSite,
+} from '@mercer/db';
 import {
   SETUP_QUEUES,
   type CertJobOutput,
@@ -17,7 +26,7 @@ import {
   type TestJobOutput,
 } from '@mercer/swis/setup-contract';
 import { adminActor } from '@/lib/auth';
-import { runWorkerJob } from '@/lib/jobs';
+import { enqueueWorkerJob, runWorkerJob } from '@/lib/jobs';
 import { server } from '@/lib/server';
 import { changesFromForm, saveChanges } from '@/lib/settings';
 import { requestSiteNotesSave } from '@/lib/writeback';
@@ -258,4 +267,30 @@ export async function finishSetupAction(_: FormState): Promise<FormState> {
   const res = await saveChanges({}, actor, { MAS_SETUP_COMPLETE: 'true' });
   if (!res.ok) return res;
   redirect('/?welcome=1');
+}
+
+/**
+ * "Use as a site" / "Not a site" / "Undo" on Settings → Mapping: an admin decision about one
+ * SolarWinds group. It wins over detection and the manual settings; the worker re-reads the
+ * groups at once so sites are linked or unlinked within seconds.
+ */
+export async function setSiteGroupDecisionAction(
+  containerId: number,
+  groupName: string,
+  decision: 'site' | 'not_site' | null,
+): Promise<void> {
+  const actor = await adminActor();
+  if (!actor) return;
+  if (!Number.isInteger(containerId) || containerId <= 0) return;
+  const { db, log } = server();
+  await setSiteGroupDecision(
+    db.db,
+    { containerId, groupName: groupName.slice(0, 300), decision },
+    actor,
+  );
+  await enqueueWorkerJob(GROUPS_POLL_QUEUE, {}).catch((err: unknown) =>
+    log.warn({ err: errorMessage(err) }, 'could not queue a groups poll'),
+  );
+  revalidatePath('/settings/mapping');
+  revalidatePath('/setup/mapping');
 }

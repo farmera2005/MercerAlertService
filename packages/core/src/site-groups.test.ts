@@ -266,10 +266,10 @@ describe('detectSiteGroups (automatic)', () => {
     ]);
     const why = Object.fromEntries(r.rejected.map((x) => [x.groupName, x.reason]));
     expect(why).toEqual({
-      'All FortiGates': 'devices are at several locations',
+      'All FortiGates': 'devices are at several locations (at most 1 of 5 in one place)',
       'Celina HQ Servers': 'mostly the same devices as “Celina HQ”',
       'Empty group': 'no monitored devices',
-      'Grain Division': 'devices are at several locations',
+      'Grain Division': 'devices are at several locations (at most 4 of 6 in one place)',
       'Rockford Scales': 'inside the site group “Rockford Elevator”',
     });
     const rock = r.siteGroups.find((s) => s.groupName === 'Rockford Elevator')!;
@@ -304,7 +304,7 @@ describe('detectSiteGroups (automatic)', () => {
   it('keeps a linked group, cleans up names, and uses nothing without location data', () => {
     const r = detectSiteGroups(autoGroups, autoMembers, ctx({ linked: new Set([105]) }));
     expect(r.siteGroups.find((s) => s.containerId === 105)?.reason).toBe(
-      'kept because it is linked to a site (on its own: devices are at several locations)',
+      'kept because it is linked to a site (on its own: devices are at several locations (at most 1 of 5 in one place))',
     );
     // A linked group that qualifies anyway shows its own reason.
     const linkedRock = detectSiteGroups(autoGroups, autoMembers, ctx({ linked: new Set([101]) }));
@@ -356,5 +356,114 @@ describe('detectSiteGroups (automatic)', () => {
       true,
     );
     expect(plan.unlink).toEqual([{ siteId: 2, containerId: 77 }]);
+  });
+});
+
+describe('detectSiteGroups on messier networks', () => {
+  // Every site shares 10.0.0.0/16 and there is no Site property, so the /16 and the property tell
+  // nothing apart; sites use several /24s, and hostnames follow two conventions.
+  const f = (
+    nodeId: number,
+    caption: string,
+    ip: string,
+    role: string,
+    location: string | null = null,
+  ): NodeFacts => ({
+    nodeId,
+    caption,
+    ip,
+    role,
+    siteValue: null,
+    location,
+  });
+  const nodes: NodeFacts[] = [
+    // Rockford Elevator: two naming styles, two subnets.
+    f(1, 'ROCK-FW01', '10.0.21.1', 'firewall'),
+    f(2, 'ROCK-SW01', '10.0.21.2', 'switch'),
+    f(3, 'rockford-ap1', '10.0.121.5', 'access_point'),
+    f(4, 'rockford-ap2', '10.0.121.6', 'access_point'),
+    f(5, 'rockford-scale', '10.0.121.7', 'scale_system'),
+    // Coldwater: generic hostnames; the Location field says where they are.
+    f(10, 'FG60F-1', '10.0.22.1', 'firewall', 'Coldwater Elevator - MDF'),
+    f(11, 'SW-24P-2', '10.0.122.2', 'switch', 'Coldwater Elevator, scale house'),
+    f(12, 'AP-3', '10.0.122.3', 'access_point', 'Coldwater Elevator'),
+    // Mendon: three devices, the firewall polled on its public WAN address.
+    f(20, 'MEN-FW01', '198.51.100.7', 'firewall'),
+    f(21, 'MEN-SW01', '10.0.23.2', 'switch'),
+    f(22, 'MEN-AP01', '10.0.23.3', 'access_point'),
+    // Elsewhere.
+    f(30, 'CEL-FW01', '10.0.10.1', 'firewall'),
+    f(31, 'CEL-SW01', '10.0.10.2', 'core_switch'),
+  ];
+  const groups: GroupRef[] = [
+    { containerId: 1, name: 'Rockford Elevator' },
+    { containerId: 2, name: 'Coldwater' },
+    { containerId: 3, name: 'Mendon' },
+    { containerId: 4, name: 'Celina HQ' },
+    { containerId: 5, name: 'All FortiGates' },
+  ];
+  const members: GroupMemberRef[] = [
+    ...[1, 2, 3, 4, 5].map((id) => node(1, id)),
+    ...[10, 11, 12].map((id) => node(2, id)),
+    ...[20, 21, 22].map((id) => node(3, id)),
+    ...[30, 31].map((id) => node(4, id)),
+    ...[1, 10, 20, 30].map((id) => node(5, id)),
+  ];
+  const ctx = (decisions?: Map<number, 'site' | 'not_site'>): DetectContext => ({
+    nodes,
+    captionRegex: '^([A-Za-z]{3,5})[-_]',
+    knownSiteKeys: new Set(),
+    linked: new Set(),
+    decisions,
+  });
+
+  it('finds sites with mixed hostnames, several subnets, a Location field or a WAN-addressed firewall', () => {
+    const r = detectSiteGroups(groups, members, ctx());
+    expect(r.siteGroups.map((s) => s.groupName)).toEqual([
+      'Celina HQ',
+      'Coldwater',
+      'Mendon',
+      'Rockford Elevator',
+    ]);
+    expect(r.rejected).toEqual([
+      {
+        containerId: 5,
+        groupName: 'All FortiGates',
+        reason: 'devices are at several locations (at most 1 of 4 in one place)',
+      },
+    ]);
+    expect(r.siteGroups.find((s) => s.groupName === 'Coldwater')!.reason).toMatch(
+      /^3 of 3 devices match its name/,
+    );
+  });
+
+  it('lets an admin decide: "not a site" and "use as a site" win, in both modes', () => {
+    const decisions = new Map<number, 'site' | 'not_site'>([
+      [3, 'not_site'],
+      [5, 'site'],
+    ]);
+    const auto = chooseSiteGroups(
+      groups,
+      members,
+      { parent: null, pattern: null, auto: true },
+      ctx(decisions),
+    );
+    expect(auto.siteGroups.map((s) => [s.groupName, s.reason])).toContainEqual([
+      'All FortiGates',
+      'marked as a site',
+    ]);
+    expect(auto.siteGroups.map((s) => s.groupName)).not.toContain('Mendon');
+    expect(auto.rejected).toContainEqual({
+      containerId: 3,
+      groupName: 'Mendon',
+      reason: 'marked “not a site”',
+    });
+    const manual = chooseSiteGroups(
+      groups,
+      members,
+      { parent: null, pattern: '^(Mendon|Coldwater)$' },
+      ctx(decisions),
+    );
+    expect(manual.siteGroups.map((s) => s.groupName)).toEqual(['All FortiGates', 'Coldwater']);
   });
 });

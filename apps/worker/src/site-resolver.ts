@@ -18,6 +18,7 @@ import {
   loadGroupMirror,
   loadGroupSiteMap,
   loadNodeFacts,
+  loadSiteGroupDecisions,
   loadSiteContextData,
   loadSiteLinkRefs,
   siteKeysAndLinks,
@@ -84,19 +85,21 @@ export class SiteResolver {
       this.groupSyncPending = false;
       return none;
     }
-    let detect = null;
+    let nodes: NodeFacts[] = [];
     if (mode === 'auto') {
-      const nodes = facts ?? (await loadNodeFacts(this.db, this.mapping.siteField));
+      nodes = facts ?? (await loadNodeFacts(this.db, this.mapping.siteField));
       // No devices yet: wait for the nodes poll rather than unlinking everything.
       if (!nodes.length) return none;
-      const { keys, linked } = siteKeysAndLinks(siteRefs);
-      detect = {
-        nodes,
-        captionRegex: this.mapping.siteFromCaptionRegex,
-        knownSiteKeys: keys,
-        linked,
-      };
     }
+    const { keys, linked } = siteKeysAndLinks(siteRefs);
+    // Admins' per-group decisions apply in both automatic and manual mode.
+    const detect = {
+      nodes,
+      captionRegex: this.mapping.siteFromCaptionRegex,
+      knownSiteKeys: keys,
+      linked,
+      decisions: await loadSiteGroupDecisions(this.db),
+    };
     const { groups, members } = await loadGroupMirror(this.db);
     const choice = chooseSiteGroups(groups, members, cfg, detect);
     const plan = planSiteGroupLinks(choice.siteGroups, siteRefs, this.mapping.autoCreateSites);
@@ -153,6 +156,7 @@ export class SiteResolver {
             caption: n.caption,
             ip: n.ipAddress,
             role: this.role(n),
+            location: n.location,
             siteValue: v === null || v === undefined ? null : String(v),
           };
         }),

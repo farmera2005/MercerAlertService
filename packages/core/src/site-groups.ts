@@ -239,7 +239,12 @@ export interface NodeFacts {
   role: string | null;
   /** The Site custom property value, if any. */
   siteValue: string | null;
+  /** The node's Location field in SolarWinds (often the SNMP sysLocation), if any. */
+  location?: string | null;
 }
+
+/** An admin's decision about one group, which wins over detection and settings. */
+export type SiteGroupDecision = 'site' | 'not_site';
 
 export interface DetectContext {
   nodes: readonly NodeFacts[];
@@ -249,6 +254,8 @@ export interface DetectContext {
   knownSiteKeys: ReadonlySet<string>;
   /** Groups already linked to a site stay site groups while they exist, so placement is stable. */
   linked: ReadonlySet<number>;
+  /** Groups an admin marked as a site or not a site (Settings → Mapping). */
+  decisions?: ReadonlyMap<number, SiteGroupDecision>;
 }
 
 export interface RejectedGroup {
@@ -264,8 +271,13 @@ export interface SiteGroupChoice {
   rejected: RejectedGroup[];
 }
 
-/** Share of a group's devices that must have one location in common. */
-export const SITE_LOCALITY_MIN = 0.8;
+/**
+ * Share of a group's devices that must be at the group's location: a device is, when any of its
+ * location signals matches the value most devices in the group have for that signal.
+ */
+export const SITE_LOCALITY_MIN = 0.75;
+/** Groups this small may have one device elsewhere (a firewall polled on its WAN address). */
+const SMALL_GROUP_MAX = 5;
 /** A location signal counts only if it tells devices apart network-wide. */
 const SIGNAL_MIN_VALUES = 3;
 const SIGNAL_MIN_COVERAGE = 0.5;
@@ -274,13 +286,62 @@ const SIBLING_SHARE = 0.6;
 /** A site group mostly inside another site group is dropped. */
 const CONTAINED_SHARE = 0.8;
 
-type Signal = 'cp' | 'prefix' | 'net24' | 'net16';
+type Signal = 'cp' | 'location' | 'prefix' | 'word' | 'net24' | 'net16';
+const SIGNALS: readonly Signal[] = ['cp', 'location', 'prefix', 'word', 'net24', 'net16'];
 const SIGNAL_TEXT: Record<Signal, (k: string) => string> = {
   cp: () => 'same Site property',
+  location: () => 'same Location',
   prefix: (k) => `same hostname prefix ${k.toUpperCase()}`,
+  word: (k) => `hostnames start with ${k.toUpperCase()}`,
   net24: (k) => `same subnet ${k}.x`,
   net16: (k) => `same network ${k}.x.x`,
 };
+/** Location values that say nothing. */
+const NO_LOCATION = new Set(['', 'unknown', 'notset', 'na', 'none', 'default', 'location']);
+
+/** "Rockford Elevator - MDF rack 2" → "rockfordelevator". */
+function locationKey(location: string | null | undefined): string {
+  const first = (location ?? '').split(/\s+-\s+|[,;/|(]/)[0] ?? '';
+  const key = normalizeKey(first);
+  return NO_LOCATION.has(key) ? '' : key;
+}
+
+/** The first word of a hostname: "Rockford-SW01" → "rockford", "rkfd_fg60f.mercer" → "rkfd". */
+function hostnameWord(caption: string | null): string {
+  const word = (caption ?? '').trim().split(/[-_. ]/)[0] ?? '';
+  return /[a-z]/i.test(word) && word.length >= 2 ? normalizeKey(word) : '';
+}
+
+/** Apply admin decisions to a choice: they win over detection and the manual settings. */
+function applyDecisions(
+  groups: readonly GroupRef[],
+  choice: { siteGroups: SiteGroup[]; rejected: RejectedGroup[] },
+  decisions: ReadonlyMap<number, SiteGroupDecision> | undefined,
+): { siteGroups: SiteGroup[]; rejected: RejectedGroup[] } {
+  if (!decisions?.size) return choice;
+  const byId = new Map(groups.map((g) => [g.containerId, g]));
+  const siteGroups = choice.siteGroups.filter((g) => decisions.get(g.containerId) !== 'not_site');
+  const rejected = choice.rejected.filter((r) => !decisions.has(r.containerId));
+  const chosen = new Set(siteGroups.map((g) => g.containerId));
+  for (const [cid, d] of decisions) {
+    const g = byId.get(cid);
+    if (!g) continue;
+    if (d === 'site' && !chosen.has(cid)) {
+      siteGroups.push({
+        containerId: cid,
+        groupName: g.name,
+        siteName: cleanGroupName(g.name),
+        reason: 'marked as a site',
+      });
+    } else if (d === 'site') {
+      const sg = siteGroups.find((x) => x.containerId === cid)!;
+      sg.reason = 'marked as a site';
+    } else rejected.push({ containerId: cid, groupName: g.name, reason: 'marked “not a site”' });
+  }
+  siteGroups.sort((a, b) => a.siteName.localeCompare(b.siteName) || a.containerId - b.containerId);
+  rejected.sort((a, b) => a.groupName.localeCompare(b.groupName));
+  return { siteGroups, rejected };
+}
 
 /** Choose the site groups for the current settings: manual, automatic, or none. */
 export function chooseSiteGroups(
@@ -291,9 +352,19 @@ export function chooseSiteGroups(
 ): SiteGroupChoice {
   const mode = siteGroupMode(cfg);
   if (mode === 'manual')
-    return { mode, siteGroups: selectSiteGroups(groups, members, cfg), rejected: [] };
+    return {
+      mode,
+      ...applyDecisions(
+        groups,
+        { siteGroups: selectSiteGroups(groups, members, cfg), rejected: [] },
+        detect?.decisions,
+      ),
+    };
   if (mode === 'off' || !detect) return { mode, siteGroups: [], rejected: [] };
-  return { mode, ...detectSiteGroups(groups, members, detect) };
+  return {
+    mode,
+    ...applyDecisions(groups, detectSiteGroups(groups, members, detect), detect.decisions),
+  };
 }
 
 /**
@@ -357,8 +428,12 @@ export function detectSiteGroups(
     const k: Partial<Record<Signal, string>> = {};
     const cp = n.siteValue ? normalizeKey(n.siteValue) : '';
     if (cp) k.cp = cp;
+    const loc = locationKey(n.location);
+    if (loc) k.location = loc;
     const prefix = captionRe && n.caption ? captionRe.exec(n.caption)?.[1] : undefined;
     if (prefix && normalizeKey(prefix)) k.prefix = normalizeKey(prefix);
+    const word = hostnameWord(n.caption);
+    if (word) k.word = word;
     const ip = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.\d{1,3}$/.exec(n.ip ?? '');
     if (ip) {
       k.net24 = `${ip[1]}.${ip[2]}.${ip[3]}`;
@@ -366,7 +441,7 @@ export function detectSiteGroups(
     }
     keysOf.set(n.nodeId, k);
   }
-  const signals = (['cp', 'prefix', 'net24', 'net16'] as const).filter((sig) => {
+  const signals = SIGNALS.filter((sig) => {
     const values = [...keysOf.values()].map((k) => k[sig]).filter((v): v is string => !!v);
     return (
       values.length >= SIGNAL_MIN_COVERAGE * Math.max(1, ctx.nodes.length) &&
@@ -377,19 +452,29 @@ export function detectSiteGroups(
 
   interface Stats {
     size: number;
+    /** Devices at the group's location (agreeing on at least one signal). */
+    agree: number;
+    /** Most devices sharing any one location value, for the reason text. */
+    together: number;
+    /** Devices whose hostname, Site property or Location matches the group's name. */
+    named: number;
+    /** Devices sharing the best signal's value. */
+    bestCount: number;
     locality: number;
+    /** The signal most devices share, for the reason text. */
     signal: Signal | null;
     key: string | null;
     roles: number;
     nameMatch: boolean;
     siteName: string;
   }
+  const knownKeys = [...ctx.knownSiteKeys];
   const stats = new Map<number, Stats>();
   for (const g of groups) {
     const nodes = [...nodesOf.get(g.containerId)!].filter((n) => keysOf.has(n));
-    let locality = 0;
-    let signal: Signal | null = null;
-    let key: string | null = null;
+    // The value most devices in the group have, per signal (when it is a real majority).
+    const majority = new Map<Signal, { key: string; count: number }>();
+    let together = 0;
     for (const sig of signals) {
       const counts = new Map<string, number>();
       let present = 0;
@@ -399,25 +484,55 @@ export function detectSiteGroups(
         present++;
         counts.set(v, (counts.get(v) ?? 0) + 1);
       }
-      if (!present || present < 0.5 * nodes.length) continue;
-      const [topKey, top] = [...counts].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))[0]!;
-      const share = top / present;
-      if (share > locality) [locality, signal, key] = [share, sig, topKey];
+      if (!present) continue;
+      const [key, count] = [...counts].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))[0]!;
+      together = Math.max(together, count);
+      if (count >= 0.5 * present && count >= 0.5 * nodes.length) majority.set(sig, { key, count });
     }
+    const siteName = cleanGroupName(g.name);
+    const nameKey = normalizeKey(siteName);
+    const contains = (a: string, b: string) =>
+      a.length >= 4 && b.length >= 4 && (a.includes(b) || b.includes(a));
+    // A device whose hostname starts like the group's name, or whose Site property or Location
+    // matches it, is at that site: "ROCK-FW01" and "rockford-ap1" in "Rockford Elevator".
+    const namedHere = (k: Partial<Record<Signal, string>>) =>
+      nameKey.length >= 3 &&
+      ((!!k.prefix && k.prefix.length >= 3 && nameKey.startsWith(k.prefix)) ||
+        (!!k.word && k.word.length >= 3 && nameKey.startsWith(k.word)) ||
+        (!!k.cp && (k.cp === nameKey || contains(k.cp, nameKey))) ||
+        (!!k.location && (k.location === nameKey || contains(k.location, nameKey))));
+    const named = nodes.filter((n) => namedHere(keysOf.get(n)!)).length;
+    const agree = nodes.filter((n) => {
+      const k = keysOf.get(n)!;
+      return namedHere(k) || [...majority].some(([sig, m]) => k[sig] === m.key);
+    }).length;
+    const locality = nodes.length ? agree / nodes.length : 0;
+    let signal: Signal | null = null;
+    let key: string | null = null;
+    let best = 0;
+    for (const [sig, m] of majority)
+      if (m.count > best) [best, signal, key] = [m.count, sig, m.key];
     const roles = new Set(
       nodes.map((n) => roleOf.get(n)).filter((r): r is string => !!r && r !== 'other'),
     ).size;
-    const siteName = cleanGroupName(g.name);
-    const nameKey = normalizeKey(siteName);
-    const cpKey = signal === 'cp' ? key : null;
-    const prefixKey = signal === 'prefix' ? key : null;
+    const cpKey = majority.get('cp')?.key;
+    const locKey = majority.get('location')?.key;
+    const prefixKey = majority.get('prefix')?.key;
+    const wordKey = majority.get('word')?.key;
     const nameMatch =
       !!nameKey &&
       (ctx.knownSiteKeys.has(nameKey) ||
-        (!!cpKey && (nameKey === cpKey || nameKey.includes(cpKey) || cpKey.includes(nameKey))) ||
-        (!!prefixKey && prefixKey.length >= 3 && nameKey.startsWith(prefixKey)));
+        knownKeys.some((k) => k.startsWith(nameKey) && nameKey.length >= 4) ||
+        (!!cpKey && (nameKey === cpKey || contains(nameKey, cpKey))) ||
+        (!!locKey && (nameKey === locKey || contains(nameKey, locKey))) ||
+        (!!prefixKey && prefixKey.length >= 3 && nameKey.startsWith(prefixKey)) ||
+        (!!wordKey && wordKey.length >= 3 && nameKey.startsWith(wordKey)));
     stats.set(g.containerId, {
       size: nodes.length,
+      agree,
+      together: Math.max(together, agree),
+      named,
+      bestCount: best,
       locality,
       signal,
       key,
@@ -426,10 +541,15 @@ export function detectSiteGroups(
       siteName,
     });
   }
+  const isLocal = (st: Stats) =>
+    st.size > 0 &&
+    (st.locality >= SITE_LOCALITY_MIN ||
+      (st.size >= 3 && st.size <= SMALL_GROUP_MAX && st.agree >= st.size - 1));
 
   const reasonFor = (st: Stats): string => {
     const parts: string[] = [];
-    if (st.signal && st.key) parts.push(SIGNAL_TEXT[st.signal](st.key));
+    if (st.named > st.bestCount) parts.push(`${st.named} of ${st.size} devices match its name`);
+    else if (st.signal && st.key) parts.push(SIGNAL_TEXT[st.signal](st.key));
     if (st.roles >= 2) parts.push(`${st.roles} kinds of device`);
     if (st.nameMatch) parts.push('named after a site');
     return parts.join(', ');
@@ -440,7 +560,8 @@ export function detectSiteGroups(
   const keptLinked = new Map<number, string>();
   for (const g of groups) {
     const st = stats.get(g.containerId)!;
-    const local = st.locality >= SITE_LOCALITY_MIN;
+    const local = isLocal(st);
+    if (ctx.decisions?.get(g.containerId) === 'not_site') continue;
     if (st.size === 0) rejected.set(g.containerId, 'no monitored devices');
     else if (!local && !signals.length && ctx.knownSiteKeys.has(normalizeKey(st.siteName)))
       // Nothing to compare locations with: a group named exactly after a site is still one.
@@ -448,7 +569,9 @@ export function detectSiteGroups(
     else if (!local)
       rejected.set(
         g.containerId,
-        signals.length ? 'devices are at several locations' : 'no location information to compare',
+        signals.length
+          ? `devices are at several locations (at most ${st.together} of ${st.size} in one place)`
+          : 'no location information to compare',
       );
     else if (st.roles >= 2 || st.nameMatch) accepted.add(g.containerId);
     else rejected.set(g.containerId, 'one kind of device, and not named after a site');
@@ -541,8 +664,8 @@ export function detectSiteGroups(
       (c) =>
         !chosen.has(c) &&
         !accepted.has(c) &&
-        stats.get(c)!.size > 0 &&
-        stats.get(c)!.locality >= SITE_LOCALITY_MIN &&
+        ctx.decisions?.get(c) !== 'not_site' &&
+        isLocal(stats.get(c)!) &&
         ![...nodesOf.get(c)!].some((n) => taken.has(n)),
     );
     if (sites.length < 2 || sites.length < SIBLING_SHARE * (sites.length + candidates.length))

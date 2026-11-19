@@ -100,3 +100,20 @@ test('sites follow SolarWinds groups, and site notes are saved to the group', as
   await page.goto('/settings/devices?filter=all');
   await expect(page.getByTestId('devices').getByText('SolarWinds group').first()).toBeVisible();
 });
+
+test('an admin can mark a found group “not a site”, and undo it', async ({ page }) => {
+  await signIn(page);
+  await page.goto('/settings/mapping');
+  const rows = page.getByTestId('site-group-rows');
+  const row = rows.locator('tr', { hasText: 'Site - Spencerville' });
+  await row.getByRole('button', { name: 'Not a site: Site - Spencerville' }).click();
+  await expect(rows).not.toContainText('Site - Spencerville');
+
+  const rejected = page.getByTestId('site-group-rejected');
+  await rejected.locator('summary').click();
+  const item = rejected.locator('li', { hasText: 'Site - Spencerville' });
+  await expect(item).toContainText('marked “not a site”');
+  await item.getByRole('button', { name: 'Undo: Site - Spencerville' }).click();
+  await expect(rows.locator('tr', { hasText: 'Site - Spencerville' })).toBeVisible();
+  await expect(page.getByTestId('site-group-status')).toContainText('Found automatically');
+});

@@ -3,6 +3,9 @@ import { z } from 'zod';
 
 export const WRITEBACK_ACK_QUEUE = 'swis.writeback.ack';
 
+/** The groups poll; the web app queues one after a site-group decision so it applies at once. */
+export const GROUPS_POLL_QUEUE = 'swis.poll.groups';
+
 export const writebackAckSchema = z.object({
   incidentId: z.number().int().positive(),
   /** Display name of the person who acknowledged in MAS. */

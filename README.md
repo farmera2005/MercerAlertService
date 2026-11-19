@@ -337,8 +337,10 @@ Every write appears on the incident timeline or next to the site notes, and in t
 ### Sites from SolarWinds groups
 
 If each site is a group in SolarWinds, MAS finds those groups by itself. Nothing needs to be set
-up. A group counts as a site when most of its devices share a location (the same Site property,
-hostname prefix or subnet) and it holds several kinds of device or is named after a site. That
+up. A group counts as a site when most of its devices share a location and it holds several kinds
+of device or is named after a site. A location can be the same Site property, Location field,
+hostname prefix or subnet, or a hostname that matches the group's name. Small groups may have one
+device that doesn't match, such as a firewall with a WAN address. That
 rules out groups like "All FortiGates" (devices at every site), "Critical servers" (one kind of
 device), regions that contain several site groups, and groups inside a site group (such as
 "Rockford Scales").
@@ -354,10 +356,17 @@ device), regions that contain several site groups, and groups inside a site grou
   site, it stays one while it exists, so devices don't move back and forth.
 
 Settings → Mapping → **Sites from SolarWinds groups** lists what MAS found, why, and why the other
-groups are not sites. If it picks the wrong groups, open **Choose the groups yourself**. There you
-can name the group that holds the site groups, or give a name pattern such as `^Site - (.+)$`;
-either one replaces the automatic choice. Unchecking **Find the site groups automatically** stops
-using groups altogether.
+groups are not sites. To correct a single group, use its button:
+
+- **Use as a site** (under "Groups that are not sites") makes that group a site.
+- **Not a site** stops using a group that was found.
+- **Undo** returns the group to the automatic choice.
+
+Each choice is kept, audited and applied within seconds. If most of the choices are wrong, open
+**Choose the groups yourself**. There you can name the group that holds the site groups, or give a
+name pattern such as `^Site - (.+)$`; either one replaces the automatic choice. The per-group
+choices still apply. Unchecking **Find the site groups automatically** stops using groups
+altogether.
 
 ---
 

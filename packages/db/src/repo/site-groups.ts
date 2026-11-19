@@ -7,11 +7,19 @@ import {
   type GroupMemberRef,
   type GroupRef,
   type NodeFacts,
+  type SiteGroupDecision,
   type SiteGroup,
   type SiteGroupPlan,
   type SiteLinkRef,
 } from '@mercer/core';
-import { orionGroupMembers, orionGroups, orionNodes, siteNotesWrites, sites } from '../schema';
+import {
+  orionGroupMembers,
+  orionGroups,
+  orionNodes,
+  siteGroupDecisions,
+  siteNotesWrites,
+  sites,
+} from '../schema';
 import type { Db, DbOrTx } from '../client';
 import { writeAudit } from './audit';
 import type { Actor } from './settings';
@@ -107,6 +115,7 @@ export async function loadNodeFacts(db: DbOrTx, siteField: string): Promise<Node
       caption: orionNodes.caption,
       ip: orionNodes.ipAddress,
       role: orionNodes.deviceRole,
+      location: orionNodes.location,
       customProperties: orionNodes.customProperties,
     })
     .from(orionNodes)
@@ -120,8 +129,71 @@ export async function loadNodeFacts(db: DbOrTx, siteField: string): Promise<Node
       caption: r.caption,
       ip: r.ip,
       role: r.role,
+      location: r.location,
       siteValue: v === null || v === undefined ? null : String(v),
     };
+  });
+}
+
+/** Admins' "Use as a site" / "Not a site" decisions, by group. */
+export async function loadSiteGroupDecisions(db: DbOrTx): Promise<Map<number, SiteGroupDecision>> {
+  const rows = await db.select().from(siteGroupDecisions);
+  return new Map(rows.map((r) => [r.containerId, r.decision]));
+}
+
+/** Record (or with `null`, clear) a decision about one group; audited in the same transaction. */
+export async function setSiteGroupDecision(
+  db: Db,
+  input: { containerId: number; groupName: string; decision: SiteGroupDecision | null },
+  actor: Actor,
+): Promise<void> {
+  await db.transaction(async (tx) => {
+    const [before] = await tx
+      .select()
+      .from(siteGroupDecisions)
+      .where(eq(siteGroupDecisions.containerId, input.containerId));
+    if (input.decision === null) {
+      await tx
+        .delete(siteGroupDecisions)
+        .where(eq(siteGroupDecisions.containerId, input.containerId));
+      // Undoing "use as a site": drop the link it made, or detection would keep the group as a
+      // site because it is linked. If detection accepts the group, the next sync links it again.
+      if (before?.decision === 'site') {
+        const unlinked = await tx
+          .update(sites)
+          .set({ orionContainerId: null, updatedAt: new Date() })
+          .where(eq(sites.orionContainerId, input.containerId))
+          .returning({ id: sites.id });
+        for (const s of unlinked)
+          await writeAudit(tx, {
+            ...actor,
+            action: 'site.group_unlink',
+            targetType: 'site',
+            targetId: s.id,
+            before: { orionContainerId: input.containerId },
+          });
+      }
+    } else {
+      const row = {
+        containerId: input.containerId,
+        decision: input.decision,
+        groupName: input.groupName,
+        decidedBy: actor.actorLabel,
+        decidedAt: new Date(),
+      };
+      await tx
+        .insert(siteGroupDecisions)
+        .values(row)
+        .onConflictDoUpdate({ target: siteGroupDecisions.containerId, set: row });
+    }
+    await writeAudit(tx, {
+      ...actor,
+      action: 'site.group_decision',
+      targetType: 'orion_group',
+      targetId: input.containerId,
+      before: before ? { decision: before.decision } : null,
+      after: { group: input.groupName, decision: input.decision },
+    });
   });
 }
 

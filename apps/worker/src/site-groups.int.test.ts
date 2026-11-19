@@ -5,7 +5,13 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import pg from 'pg';
 import { generateMasterKey, initLogger, loadConfig } from '@mercer/core';
-import { createDb, requestSiteNotesWrite, seedReferenceData, type DbHandle } from '@mercer/db';
+import {
+  createDb,
+  requestSiteNotesWrite,
+  seedReferenceData,
+  setSiteGroupDecision,
+  type DbHandle,
+} from '@mercer/db';
 import { runMigrations } from '@mercer/db/migrate';
 import { startMockSwis, type MockSwis } from '@mercer/mock-swis';
 import { createWorker, type Worker } from './worker';
@@ -255,5 +261,85 @@ describe.skipIf(!url)('sites from SolarWinds groups (integration)', () => {
       `select count(*)::int as n from audit_log where action = 'site.group_unlink'`,
     );
     expect(unlinks[0]!.n).toBe(total);
+  });
+
+  it('applies an admin’s “use as a site” and “not a site”, and undoes them', async () => {
+    const cfg = loadConfig(env);
+    const resolver = new SiteResolver(h.db, cfg.mapping, silent);
+    const linkOf = async (cid: number) =>
+      (await q<{ name: string }>('select name from sites where orion_container_id = $1', [cid]))[0]
+        ?.name ?? null;
+
+    // A group of the firewalls at every site: detection says no.
+    const firewalls = mock.world.nodes.filter((n) => /-FW\d/.test(String(n.Caption))).slice(0, 4);
+    expect(firewalls.length).toBe(4);
+    const cid = 9000;
+    mock.world.groups.push({
+      ContainerID: cid,
+      Name: 'Pilot Firewalls',
+      Status: 1,
+      Description: '',
+      Uri: `swis://mock/Orion/Orion.Groups/ContainerID=${cid}`,
+    });
+    for (const n of firewalls)
+      mock.world.groupMembers.push({
+        ContainerID: cid,
+        MemberUri: `swis://mock/Orion/Orion.Nodes/NodeID=${String(n.NodeID)}`,
+        MemberPrimaryID: n.NodeID,
+        MemberEntityType: 'Orion.Nodes',
+        Name: n.Caption,
+        Status: 1,
+      });
+    expect(await worker.pollOnce('groups')).not.toBeNull();
+    expect(await linkOf(cid)).toBeNull();
+
+    await setSiteGroupDecision(
+      h.db,
+      { containerId: cid, groupName: 'Pilot Firewalls', decision: 'site' },
+      admin,
+    );
+    expect(await resolver.syncSiteGroups()).toMatchObject({ created: 1 });
+    expect(await linkOf(cid)).toBe('Pilot Firewalls');
+
+    // A real site group marked “not a site” is unlinked; its site stays.
+    const g = mock.world.groups[3]!;
+    const other = Number(g.ContainerID);
+    const name = await linkOf(other);
+    expect(name).not.toBeNull();
+    await setSiteGroupDecision(
+      h.db,
+      { containerId: other, groupName: String(g.Name), decision: 'not_site' },
+      admin,
+    );
+    expect(await resolver.syncSiteGroups()).toMatchObject({ unlinked: 1 });
+    expect(await linkOf(other)).toBeNull();
+    expect((await q('select id from sites where name = $1', [name])).length).toBe(1);
+
+    // Undo both: detection decides again.
+    await setSiteGroupDecision(
+      h.db,
+      { containerId: cid, groupName: 'Pilot Firewalls', decision: null },
+      admin,
+    );
+    await setSiteGroupDecision(
+      h.db,
+      { containerId: other, groupName: String(g.Name), decision: null },
+      admin,
+    );
+    // Undoing "use as a site" unlinks at once; the sync then links the real site group again.
+    expect(await linkOf(cid)).toBeNull();
+    expect(await resolver.syncSiteGroups()).toMatchObject({ linked: 1, unlinked: 0 });
+    expect(await linkOf(cid)).toBeNull();
+    expect(await linkOf(other)).toBe(name);
+
+    const audit = await q<{ target_id: string; after: { decision: string } | null }>(
+      `select target_id, after from audit_log where action = 'site.group_decision' order by id`,
+    );
+    expect(audit.map((a) => [a.target_id, a.after?.decision ?? null])).toEqual([
+      [String(cid), 'site'],
+      [String(other), 'not_site'],
+      [String(cid), null],
+      [String(other), null],
+    ]);
   });
 });

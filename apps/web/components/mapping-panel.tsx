@@ -1,10 +1,11 @@
 'use client';
 
-import { useActionState, useMemo, useState } from 'react';
+import { useActionState, useMemo, useState, useTransition } from 'react';
 import type { DiscoveryReport } from '@mercer/swis/setup-contract';
 import {
   runDiscoveryAction,
   saveSectionsAction,
+  setSiteGroupDecisionAction,
   type DiscoverState,
   type FormState,
 } from '@/app/actions/settings';
@@ -69,11 +70,16 @@ function CpSelect({
   );
 }
 
+type Decision = 'site' | 'not_site';
+
 export interface SiteGroupPreview {
   mode: 'manual' | 'auto' | 'off';
   /** Groups in the last groups poll (0 = not polled yet). */
   groupsPolled: number;
   rows: Array<{
+    containerId: number;
+    /** An admin's choice for this group, if any. */
+    decided: Decision | null;
     groupName: string;
     siteName: string;
     devices: number;
@@ -81,8 +87,43 @@ export interface SiteGroupPreview {
     /** Why automatic detection chose it. */
     reason: string | null;
   }>;
-  /** Groups automatic detection did not use, and why. */
-  rejected: Array<{ groupName: string; reason: string }>;
+  /** Groups automatic detection did not use (or an admin marked), and why. */
+  rejected: Array<{
+    containerId: number;
+    decided: Decision | null;
+    groupName: string;
+    reason: string;
+  }>;
+}
+
+/**
+ * One group's correction. A plain button calling the action (not a form submit), so unsaved edits
+ * in the mapping form around it are kept.
+ */
+function DecisionButton({
+  containerId,
+  groupName,
+  decision,
+  label,
+}: {
+  containerId: number;
+  groupName: string;
+  decision: Decision | null;
+  label: string;
+}) {
+  const [pending, start] = useTransition();
+  return (
+    <Button
+      type="button"
+      variant="secondary"
+      className="px-2 py-0.5 text-xs"
+      disabled={pending}
+      aria-label={`${label}: ${groupName}`}
+      onClick={() => start(() => setSiteGroupDecisionAction(containerId, groupName, decision))}
+    >
+      {pending ? 'Saving…' : label}
+    </Button>
+  );
 }
 
 function siteGroupStatus(p: SiteGroupPreview): string {
@@ -127,6 +168,7 @@ export function MappingPanel({
   const missingRequired = report?.fields.filter((x) => x.required && !x.present) ?? [];
   const missingOptional = report?.fields.filter((x) => !x.required && !x.present) ?? [];
   const failedChecks = report?.queryChecks.filter((q) => !q.ok) ?? [];
+  const showWhy = siteGroups.mode === 'auto' || siteGroups.rows.some((r) => r.decided);
 
   return (
     <div className="space-y-6">
@@ -220,34 +262,57 @@ export function MappingPanel({
                   <th className="py-1 pr-4">SolarWinds group</th>
                   <th className="py-1 pr-4 text-right">Devices</th>
                   <th className="py-1 pr-4">Site in MAS</th>
-                  {siteGroups.mode === 'auto' && <th className="py-1">Why it is a site</th>}
+                  {showWhy && <th className="py-1 pr-4">Why it is a site</th>}
+                  <th className="py-1">
+                    <span className="sr-only">Change</span>
+                  </th>
                 </tr>
               </thead>
               <tbody>
                 {siteGroups.rows.map((r) => (
-                  <tr key={r.groupName} className="border-t border-white/5 align-top">
+                  <tr key={r.containerId} className="border-t border-white/5 align-top">
                     <td className="py-1.5 pr-4">{r.groupName}</td>
                     <td className="py-1.5 pr-4 text-right tabular-nums">{r.devices}</td>
                     <td className={`py-1.5 pr-4 ${r.linkedSite ? '' : 'text-amber-300'}`}>
                       {r.linkedSite ?? `“${r.siteName}”, at the next groups poll`}
                     </td>
-                    {siteGroups.mode === 'auto' && (
-                      <td className="py-1.5 text-xs leading-5 text-slate-400">{r.reason}</td>
+                    {showWhy && (
+                      <td className="py-1.5 pr-4 text-xs leading-5 text-slate-400">{r.reason}</td>
                     )}
+                    <td className="py-1 text-right">
+                      <DecisionButton
+                        containerId={r.containerId}
+                        groupName={r.groupName}
+                        decision={r.decided === 'site' ? null : 'not_site'}
+                        label={r.decided === 'site' ? 'Undo' : 'Not a site'}
+                      />
+                    </td>
                   </tr>
                 ))}
               </tbody>
             </table>
           )}
-          {siteGroups.mode === 'auto' && siteGroups.rejected.length > 0 && (
+          {siteGroups.mode !== 'off' && siteGroups.rejected.length > 0 && (
             <details className="mt-4 text-sm" data-testid="site-group-rejected">
               <summary className="cursor-pointer text-slate-300">
                 Groups that are not sites ({siteGroups.rejected.length})
               </summary>
-              <ul className="mt-2 space-y-1">
+              <p className="mt-2 text-xs text-slate-400">
+                If one of these is a site, choose “Use as a site”. Your choice is kept, and the site
+                appears at once.
+              </p>
+              <ul className="mt-2 divide-y divide-white/5">
                 {siteGroups.rejected.map((r) => (
-                  <li key={r.groupName}>
-                    {r.groupName} <span className="text-xs text-slate-400">— {r.reason}</span>
+                  <li key={r.containerId} className="flex items-start justify-between gap-4 py-1.5">
+                    <span>
+                      {r.groupName} <span className="text-xs text-slate-400">— {r.reason}</span>
+                    </span>
+                    <DecisionButton
+                      containerId={r.containerId}
+                      groupName={r.groupName}
+                      decision={r.decided === 'not_site' ? null : 'site'}
+                      label={r.decided === 'not_site' ? 'Undo' : 'Use as a site'}
+                    />
                   </li>
                 ))}
               </ul>

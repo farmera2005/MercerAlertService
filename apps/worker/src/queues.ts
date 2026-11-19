@@ -1,3 +1,4 @@
+import { GROUPS_POLL_QUEUE } from '@mercer/core';
 import type { PollerName } from '@mercer/db';
 
 export const POLL_QUEUES: Record<PollerName, string> = {
@@ -5,7 +6,7 @@ export const POLL_QUEUES: Record<PollerName, string> = {
   nodes: 'swis.poll.nodes',
   interfaces: 'swis.poll.interfaces',
   events: 'swis.poll.events',
-  groups: 'swis.poll.groups',
+  groups: GROUPS_POLL_QUEUE,
   topology: 'swis.poll.topology',
 };
 

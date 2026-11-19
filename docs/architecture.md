@@ -634,21 +634,30 @@ Results go on the timeline or next to the notes, and in the audit log.
 
 **Sites from SolarWinds groups.** Which groups are sites (`core/site-groups.ts`, pure):
 
-- **Automatic, the default (`SITE_GROUP_AUTO`).** A group is a site when at least 80 % of its
-  devices share a location and it holds two or more kinds of device or is named after a known
-  site.
+- **Automatic, the default (`SITE_GROUP_AUTO`).** A group is a site when its devices are local
+  and it holds two or more kinds of device or is named after a known site.
   - A location signal counts only if it tells devices apart network-wide, with at least 3
-    values covering at least half of the devices: the Site custom property, the hostname prefix
-    (`SITE_FROM_CAPTION_REGEX`), the /24 subnet or the /16 network.
+    values covering at least half of the devices: the Site custom property, the Location field,
+    the hostname prefix (`SITE_FROM_CAPTION_REGEX`), the first word of the hostname, the /24
+    subnet or the /16 network.
+  - A device agrees with its group when it shares the group's majority value on any signal, or
+    its hostname prefix, Site or Location matches the group's name.
+  - Local means at least 75 % of the devices agree, or, in a group of 3 to 5 devices, all but
+    one (a firewall with a WAN address, a device named differently).
   - A group inside a site group is dropped, unless the outer group consists of several site
     groups (a city or region): then the outer group is dropped instead.
   - A group whose devices are 80 % inside another site group is dropped.
   - A local group with its own devices becomes a site when most of its local siblings are
     sites (a one-device site).
   - A group linked to a site stays a site while it has devices, so placement doesn't flap.
-  - Every decision carries a reason, shown on the Mapping page.
+  - Every decision carries a reason, shown on the Mapping page, with counts where they help
+    ("devices are at several locations (at most 2 of 9 in one place)").
 - **Manual.** `SITE_GROUP_PARENT` (its sub-groups) and/or `SITE_GROUP_PATTERN` (a name regex
   whose first capture group is the site name) replace detection.
+- **Per-group decisions** (`site_group_decisions`, from the Mapping page buttons) override both
+  modes. "Use as a site" adds the group, "Not a site" removes it, and the change is audited as
+  `site.group_decision`. Undoing "use as a site" also drops the link it made, because a linked
+  group would otherwise stay a site. Each choice queues a groups poll, so it applies at once.
 
 After every groups poll, and on the first nodes poll (using the devices just fetched), the
 worker plans the links, linked by `sites.orion_container_id`:

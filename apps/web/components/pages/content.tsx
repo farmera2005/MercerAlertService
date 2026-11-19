@@ -14,6 +14,7 @@ import {
   listSites,
   loadGroupMirror,
   loadNodeFacts,
+  loadSiteGroupDecisions,
   siteGroupInfo,
   siteKeysAndLinks,
 } from '@mercer/db';
@@ -91,15 +92,14 @@ async function siteGroupPreview(
   };
   const mode = siteGroupMode(cfg);
   const { keys, linked } = siteKeysAndLinks(sites);
-  const detect =
-    mode === 'auto'
-      ? {
-          nodes: await loadNodeFacts(db, mapping?.siteField ?? 'Site'),
-          captionRegex: mapping?.siteFromCaptionRegex ?? null,
-          knownSiteKeys: keys,
-          linked,
-        }
-      : null;
+  const decisions = await loadSiteGroupDecisions(db);
+  const detect = {
+    nodes: mode === 'auto' ? await loadNodeFacts(db, mapping?.siteField ?? 'Site') : [],
+    captionRegex: mapping?.siteFromCaptionRegex ?? null,
+    knownSiteKeys: keys,
+    linked,
+    decisions,
+  };
   const choice = chooseSiteGroups(groups, members, cfg, detect);
   const { byNode } = nodeSiteGroups(choice.siteGroups, members);
   const devices = new Map<number, number>();
@@ -111,13 +111,20 @@ async function siteGroupPreview(
     mode,
     groupsPolled: groups.length,
     rows: choice.siteGroups.map((g) => ({
+      containerId: g.containerId,
+      decided: decisions.get(g.containerId) ?? null,
       groupName: g.groupName,
       siteName: g.siteName,
       devices: devices.get(g.containerId) ?? 0,
       linkedSite: linkedName.get(g.containerId) ?? null,
       reason: g.reason ?? null,
     })),
-    rejected: choice.rejected.map((r) => ({ groupName: r.groupName, reason: r.reason })),
+    rejected: choice.rejected.map((r) => ({
+      containerId: r.containerId,
+      decided: decisions.get(r.containerId) ?? null,
+      groupName: r.groupName,
+      reason: r.reason,
+    })),
   };
 }
 
