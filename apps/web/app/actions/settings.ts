@@ -4,16 +4,19 @@ import { revalidatePath } from 'next/cache';
 import { redirect } from 'next/navigation';
 import {
   errorMessage,
+  GEOCODE_SITE_QUEUE,
   GROUPS_POLL_QUEUE,
   isSecretSetting,
   normalizeKey,
   settingsForSection,
+  type GeocodeSiteResult,
   type SettingSection,
 } from '@mercer/core';
 import {
   addSiteAlias,
   createSite,
   deleteSite,
+  requestUnplacedGeocodes,
   setSiteGroupDecision,
   siteGroupInfo,
   updateSite,
@@ -151,6 +154,7 @@ function siteFromForm(form: FormData) {
   return {
     name: String(form.get('name') ?? '').trim(),
     divisionCodes: divisionCodesFrom(form),
+    address: text('address')?.slice(0, 300) ?? null,
     city: text('city'),
     state: text('state'),
     lat: num('lat'),
@@ -201,12 +205,13 @@ export async function saveSiteAction(_: FormState, form: FormData): Promise<Form
   const { db } = server();
   const linked = id ? (await siteGroupInfo(db.db, [id])).get(id) : undefined;
   let notesMessage: { ok: boolean; message: string } | null = null;
+  let saved: { id: number; geoStatus: string | null } | null;
   try {
     if (id && linked) {
       // Linked to a SolarWinds group: the name follows the group, and the notes are the group
       // description (written by the worker), so neither is saved here.
       const { name: _name, contactNotes: _notes, ...rest } = s;
-      await updateSite(db.db, id, rest, actor);
+      saved = await updateSite(db.db, id, rest, actor);
       const text = String(form.get('groupNotes') ?? '').replace(/\r\n/g, '\n');
       const base = form.has('groupNotesBase') ? String(form.get('groupNotesBase')) : null;
       if (form.has('groupNotes') && text.trim() !== (base ?? '').replace(/\r\n/g, '\n').trim()) {
@@ -219,8 +224,8 @@ export async function saveSiteAction(_: FormState, form: FormData): Promise<Form
           };
         notesMessage = await requestSiteNotesSave(id, text.trim(), base, actor);
       }
-    } else if (id) await updateSite(db.db, id, s, actor);
-    else await createSite(db.db, s, actor);
+    } else if (id) saved = await updateSite(db.db, id, s, actor);
+    else saved = await createSite(db.db, s, actor);
   } catch (err) {
     if (String(err).includes('sites_code_unique'))
       return {
@@ -231,13 +236,43 @@ export async function saveSiteAction(_: FormState, form: FormData): Promise<Form
       };
     throw err;
   }
+  const geo = saved?.geoStatus === 'pending' ? await placeFromAddress(saved.id) : null;
   revalidatePath('/', 'layout');
-  if (notesMessage)
-    return {
-      ok: notesMessage.ok,
-      message: `Site saved. ${notesMessage.message}`,
-    };
-  return { ok: true, message: id ? 'Site saved.' : 'Site added.' };
+  const parts = [id ? 'Site saved.' : 'Site added.', notesMessage?.message, geo?.message];
+  return {
+    ok: (notesMessage?.ok ?? true) && (geo?.ok ?? true),
+    message: parts.filter(Boolean).join(' '),
+  };
+}
+
+/** Ask the worker to look the site's address up, and wait briefly for the answer. */
+async function placeFromAddress(siteId: number): Promise<{ ok: boolean; message: string }> {
+  const r = await runWorkerJob<GeocodeSiteResult>(GEOCODE_SITE_QUEUE, { siteId }, 15_000);
+  if (r.status === 'completed')
+    return { ok: r.output.status !== 'not_found', message: r.output.message };
+  if (r.status === 'timeout')
+    return { ok: true, message: 'Looking up the address; the site appears on the map when found.' };
+  return { ok: false, message: `The address was not looked up: ${r.message}` };
+}
+
+/** Settings → Sites "Place on the map": look up every site that has an address but no place. */
+export async function placeUnplacedSitesAction(_: FormState): Promise<FormState> {
+  const actor = await adminActor();
+  if (!actor) return NOT_SIGNED_IN;
+  const { db, log } = server();
+  const ids = await requestUnplacedGeocodes(db.db, actor);
+  let queued = 0;
+  for (const siteId of ids)
+    await enqueueWorkerJob(GEOCODE_SITE_QUEUE, { siteId })
+      .then(() => queued++)
+      .catch((err: unknown) => log.warn({ err: errorMessage(err) }, 'could not queue a lookup'));
+  revalidatePath('/', 'layout');
+  if (!ids.length)
+    return { ok: true, message: 'Every site with an address or city is on the map.' };
+  return {
+    ok: queued === ids.length,
+    message: `Looking up ${queued} of ${ids.length} sites, about one per second. They appear on the map as each is found.`,
+  };
 }
 
 export async function deleteSiteAction(form: FormData): Promise<void> {

@@ -8,6 +8,7 @@ import {
 import { createServer as createHttps } from 'node:https';
 import { join } from 'node:path';
 import { createFakeAnthropic, type FakeAnthropic } from './anthropic';
+import { createFakeNominatim, type FakeNominatim } from './nominatim';
 import { createSinks, type Sinks } from './sinks';
 import { buildScenario, type OutageMode, type Scenario, type ScenarioEnv } from './scenarios';
 import { entityTables, executeSwql, SwqlError } from './swql';
@@ -45,6 +46,8 @@ export interface MockSwis {
   sinks: Sinks;
   /** A fake Anthropic Messages API at /__mock/anthropic/v1/messages. */
   anthropic: FakeAnthropic;
+  /** A fake Nominatim (OpenStreetMap address search) at /__mock/nominatim/search. */
+  nominatim: FakeNominatim;
   close(): Promise<void>;
 }
 
@@ -92,6 +95,7 @@ export async function startMockSwis(opts: MockSwisOptions = {}): Promise<MockSwi
   const stats = { queries: 0, invokes: 0, updates: 0 };
   const sinks = createSinks();
   const anthropic = createFakeAnthropic();
+  const nominatim = createFakeNominatim();
 
   const env: ScenarioEnv = {
     get world() {
@@ -111,6 +115,8 @@ export async function startMockSwis(opts: MockSwisOptions = {}): Promise<MockSwi
       const raw = req.method === 'POST' ? await readBody(req) : '';
       const sink = sinks.handle(req.method ?? 'GET', path, req.headers, raw);
       if (sink) return send(res, sink[0], sink[1]);
+      const geo = nominatim.handle(req.method ?? 'GET', path, url, req.headers);
+      if (geo) return send(res, geo[0], geo[1]);
       const ai = await anthropic.handle(req.method ?? 'GET', path, req.headers, raw);
       if (ai) {
         if (ai[2]) {
@@ -278,6 +284,7 @@ export async function startMockSwis(opts: MockSwisOptions = {}): Promise<MockSwi
     },
     sinks,
     anthropic,
+    nominatim,
     reset() {
       for (const t of timers) clearTimeout(t);
       timers.clear();

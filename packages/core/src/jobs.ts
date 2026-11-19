@@ -30,6 +30,16 @@ export const writebackSiteNotesSchema = z.object({
 });
 export type WritebackSiteNotesJob = z.infer<typeof writebackSiteNotesSchema>;
 
+/** Place a site on the map from its address (Settings → Sites; one lookup per second). */
+export const GEOCODE_SITE_QUEUE = 'sites.geocode';
+export const geocodeSiteSchema = z.object({ siteId: z.number().int().positive() });
+export type GeocodeSiteJob = z.infer<typeof geocodeSiteSchema>;
+export interface GeocodeSiteResult {
+  status: 'ok' | 'not_found' | 'skipped';
+  message: string;
+  label?: string;
+}
+
 export const NOTIFY_TEST_QUEUE = 'notify.test';
 
 /** Settings → Notifications "Send test": a Teams channel, or one person by SMS or Pushover. */

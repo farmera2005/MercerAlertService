@@ -1,5 +1,14 @@
-import { eq, inArray, sql } from 'drizzle-orm';
-import { slugify, type DivisionRef, type NodeOverride, type SiteRef } from '@mercer/core';
+import { and, eq, inArray, isNull, or, sql } from 'drizzle-orm';
+import {
+  geocodeQuery,
+  planGeocode,
+  slugify,
+  type DivisionRef,
+  type GeoFields,
+  type GeoMatch,
+  type NodeOverride,
+  type SiteRef,
+} from '@mercer/core';
 import { divisions, nodeSiteOverrides, sites } from '../schema';
 import type { Db, DbOrTx } from '../client';
 import { writeAudit } from './audit';
@@ -73,6 +82,11 @@ export async function createAutoSites(db: DbOrTx, values: string[]): Promise<num
   return created.length;
 }
 
+export async function getSiteRow(db: DbOrTx, id: number): Promise<SiteRow | null> {
+  const [row] = await db.select().from(sites).where(eq(sites.id, id));
+  return row ?? null;
+}
+
 export async function countSites(db: DbOrTx): Promise<number> {
   const [r] = await db.select({ n: sql<number>`count(*)::int` }).from(sites);
   return r?.n ?? 0;
@@ -104,6 +118,7 @@ export type SiteInput = Pick<
   typeof sites.$inferInsert,
   | 'name'
   | 'divisionCodes'
+  | 'address'
   | 'city'
   | 'state'
   | 'lat'
@@ -136,13 +151,40 @@ async function orderedDivisionCodes(db: DbOrTx, codes: readonly string[]): Promi
   return rows.map((r) => r.code);
 }
 
+const geoOf = (s: Partial<SiteInput> & Partial<GeoFields>): GeoFields => ({
+  address: s.address ?? null,
+  city: s.city ?? null,
+  state: s.state ?? null,
+  lat: s.lat ?? null,
+  lon: s.lon ?? null,
+});
+
+/**
+ * The geo columns a save sets: a lookup to queue (geo_status 'pending'; the caller queues
+ * `sites.geocode`), typed coordinates, or nothing.
+ */
+function geoColumns(before: GeoFields | null, after: GeoFields) {
+  const plan = planGeocode(before, after);
+  if (plan.action === 'lookup')
+    return { geoStatus: 'pending' as const, geoQuery: plan.query, geoError: null };
+  if (plan.action === 'manual')
+    return { geoStatus: 'manual' as const, geoQuery: plan.query, geoLabel: null, geoError: null };
+  return {};
+}
+
 export async function createSite(db: Db, input: SiteInput, actor: SiteActor): Promise<SiteRow> {
   return db.transaction(async (tx) => {
     const code = input.code?.trim() || slugify(input.name);
     const divisionCodes = await orderedDivisionCodes(tx, input.divisionCodes ?? []);
     const [row] = await tx
       .insert(sites)
-      .values({ ...input, divisionCodes, code, profileStatus: 'confirmed' })
+      .values({
+        ...input,
+        ...geoColumns(null, geoOf(input)),
+        divisionCodes,
+        code,
+        profileStatus: 'confirmed',
+      })
       .returning();
     await writeAudit(tx, {
       ...actor,
@@ -166,9 +208,10 @@ export async function updateSite(
     if (!before) return null;
     if (patch.divisionCodes)
       patch = { ...patch, divisionCodes: await orderedDivisionCodes(tx, patch.divisionCodes) };
+    const geo = geoColumns(geoOf(before), geoOf({ ...before, ...patch }));
     const [after] = await tx
       .update(sites)
-      .set({ ...patch, profileStatus: 'confirmed', updatedAt: new Date() })
+      .set({ ...patch, ...geo, profileStatus: 'confirmed', updatedAt: new Date() })
       .where(eq(sites.id, id))
       .returning();
     await writeAudit(tx, {
@@ -223,5 +266,98 @@ export async function addSiteAlias(
       after: { aliases: after!.aliases },
     });
     return after ?? null;
+  });
+}
+
+// ---------------------------------------------------------------------------------------------
+// Map placement from addresses (the worker's sites.geocode job does the lookup)
+// ---------------------------------------------------------------------------------------------
+
+/** Queue a lookup for every site with an address or city but no coordinates; returns their IDs. */
+export async function requestUnplacedGeocodes(db: Db, actor: SiteActor): Promise<number[]> {
+  return db.transaction(async (tx) => {
+    const rows = await tx
+      .select()
+      .from(sites)
+      .where(or(isNull(sites.lat), isNull(sites.lon)));
+    const ids: number[] = [];
+    for (const s of rows) {
+      const query = geocodeQuery(s);
+      if (!query) continue;
+      await tx
+        .update(sites)
+        .set({ geoStatus: 'pending', geoQuery: query, geoError: null })
+        .where(eq(sites.id, s.id));
+      ids.push(s.id);
+    }
+    if (ids.length)
+      await writeAudit(tx, {
+        ...actor,
+        action: 'site.geocode_request',
+        targetType: 'site',
+        after: { siteIds: ids },
+      });
+    return ids;
+  });
+}
+
+export type GeocodeOutcome =
+  { kind: 'ok'; match: GeoMatch } | { kind: 'not_found' } | { kind: 'failed'; error: string };
+
+/**
+ * Store a lookup's result for `query`. Ignored (returns false) when the site has since been given
+ * another address or typed coordinates. A match moves the site, audited as the worker.
+ */
+export async function finishGeocode(
+  db: Db,
+  siteId: number,
+  query: string,
+  outcome: GeocodeOutcome,
+): Promise<boolean> {
+  return db.transaction(async (tx) => {
+    const [s] = await tx
+      .select()
+      .from(sites)
+      .where(and(eq(sites.id, siteId), eq(sites.geoQuery, query)))
+      .for('update');
+    if (!s || s.geoStatus === 'manual') return false;
+    const now = new Date();
+    if (outcome.kind === 'failed') {
+      await tx
+        .update(sites)
+        .set({ geoStatus: 'failed', geoError: outcome.error.slice(0, 500) })
+        .where(eq(sites.id, siteId));
+      return true;
+    }
+    if (outcome.kind === 'not_found') {
+      await tx
+        .update(sites)
+        .set({ geoStatus: 'not_found', geoLabel: null, geoError: null, geocodedAt: now })
+        .where(eq(sites.id, siteId));
+      return true;
+    }
+    const { lat, lon, label } = outcome.match;
+    await tx
+      .update(sites)
+      .set({
+        lat,
+        lon,
+        geoStatus: 'ok',
+        geoLabel: label.slice(0, 500),
+        geoError: null,
+        geocodedAt: now,
+        updatedAt: now,
+      })
+      .where(eq(sites.id, siteId));
+    await writeAudit(tx, {
+      actorType: 'system',
+      actorLabel: 'worker',
+      action: 'site.geocode',
+      targetType: 'site',
+      targetId: siteId,
+      before: { lat: s.lat, lon: s.lon },
+      after: { lat, lon, query, label },
+    });
+    return true;
   });
 }

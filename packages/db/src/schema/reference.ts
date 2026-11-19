@@ -38,6 +38,15 @@ export const divisions = pgTable('divisions', {
   updatedAt: ts('updated_at').notNull().defaultNow(),
 });
 
+/** Where a site's map position came from (null: never placed, or placed before addresses). */
+export const siteGeoStatus = pgEnum('site_geo_status', [
+  'pending',
+  'ok',
+  'not_found',
+  'failed',
+  'manual',
+]);
+
 /** Site Profile. */
 export const sites = pgTable('sites', {
   id: serial('id').primaryKey(),
@@ -48,6 +57,8 @@ export const sites = pgTable('sites', {
     .array()
     .notNull()
     .default(sql`'{}'::text[]`),
+  /** Street address; the worker places the site on the map from it (or from city and state). */
+  address: text('address'),
   city: text('city'),
   state: text('state'),
   lat: doublePrecision('lat'),
@@ -72,6 +83,13 @@ export const sites = pgTable('sites', {
     .notNull()
     .default(sql`'{}'::text[]`),
   profileStatus: profileStatus('profile_status').notNull().default('auto'),
+  geoStatus: siteGeoStatus('geo_status'),
+  /** The text last looked up (or the address when the coordinates were typed). */
+  geoQuery: text('geo_query'),
+  /** The place the lookup matched, e.g. "Rockford, Mercer County, Ohio, United States". */
+  geoLabel: text('geo_label'),
+  geoError: text('geo_error'),
+  geocodedAt: ts('geocoded_at'),
   createdAt: ts('created_at').notNull().defaultNow(),
   updatedAt: ts('updated_at').notNull().defaultNow(),
 });

@@ -1,6 +1,7 @@
 import 'server-only';
 import {
   chooseSiteGroups,
+  geocodeQuery,
   INTERNAL_SETTING_KEYS,
   nodeSiteGroups,
   normalizeKey,
@@ -194,6 +195,10 @@ export async function SitesContent() {
       divisions={divisions.map((d) => ({ code: d.code, name: d.name }))}
       unmatched={unmatched}
       writebackEnabled={!!state.cfg?.swis.writeback.enabled}
+      addressLookup={!!state.cfg?.map.geocoder}
+      unplaced={
+        sites.filter((s) => (s.lat === null || s.lon === null) && geocodeQuery(s) !== null).length
+      }
     />
   );
 }

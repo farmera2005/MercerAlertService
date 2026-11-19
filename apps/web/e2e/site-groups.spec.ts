@@ -117,3 +117,41 @@ test('an admin can mark a found group “not a site”, and undo it', async ({ p
   await expect(rows.locator('tr', { hasText: 'Site - Spencerville' })).toBeVisible();
   await expect(page.getByTestId('site-group-status')).toContainText('Found automatically');
 });
+
+test('a site is placed on the map from its address', async ({ page }) => {
+  await signIn(page);
+  // Point the address lookup at the mock's fake OpenStreetMap search (reached by the worker).
+  const swis = process.env.E2E_SWIS_URL ?? 'http://mock-swis:17774';
+  await page.goto('/settings/wall');
+  await page
+    .locator('details', { has: page.locator('#f-MAP_GEOCODER_URL') })
+    .locator('summary')
+    .click();
+  await page.fill('#f-MAP_GEOCODER_URL', `${swis}/__mock/nominatim`);
+  await expect(page.locator('#f-MAP_ADDRESS_LOOKUP')).toBeChecked();
+  await page.getByRole('button', { name: 'Save map & wall settings' }).click();
+  await expect(page.getByText(/^Saved\.$/).first()).toBeVisible();
+
+  await page.goto('/settings/sites');
+  const add = page.locator('form', { has: page.getByRole('button', { name: 'Add site' }) });
+  await add.locator('input[name=name]').fill('Geo Test Site');
+  await add.locator('input[name=address]').fill('200 S Main St, Celina, OH 45822');
+  await add.getByRole('button', { name: 'Add site' }).click();
+  await expect(
+    add.getByText(/Placed on the map: 200 S Main St, Celina, OH 45822, Ohio/),
+  ).toBeVisible({
+    timeout: 20_000,
+  });
+
+  const summary = page.locator('summary', { hasText: 'Geo Test Site' });
+  await expect(summary).not.toContainText('not on map');
+  await summary.click();
+  const form = page.locator('details', { has: summary });
+  await expect(form.getByTestId('geo-status')).toContainText('On the map at: 200 S Main St');
+  await expect(form.locator('input[name=lat]')).not.toHaveValue('');
+
+  const res = await fetch(`${control}/__mock/nominatim`);
+  const body = (await res.json()) as { requests: Array<{ q: string; userAgent: string }> };
+  const req = body.requests.find((r) => r.q === '200 S Main St, Celina, OH 45822');
+  expect(req?.userAgent).toMatch(/^MercerAlertService\//);
+});

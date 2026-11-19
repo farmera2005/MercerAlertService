@@ -43,7 +43,8 @@ Requirements:
 - Outbound TCP **17774** to the Orion server.
 - Outbound HTTPS to the hosts listed in [architecture §11](docs/architecture.md#11-security--operations):
   `login.microsoftonline.com` for Microsoft sign-in, `tile.openstreetmap.org` for the map
-  (unless you use an offline map image), the Teams Workflows host (`*.logic.azure.com` /
+  (unless you use an offline map image), `nominatim.openstreetmap.org` to place sites from their
+  address, the Teams Workflows host (`*.logic.azure.com` /
   `*.powerplatform.com`), `api.pushover.net` and `api.twilio.com` for notifications, and
   `api.anthropic.com` for AI summaries and digests (optional).
 
@@ -145,8 +146,22 @@ MAS sees it), give it an expiry, and **Rotate** or **Revoke** it at any time. Th
 between open incidents, the sites and the map with large text, and never shows buttons, links
 or IP addresses.
 
-For a server without internet access, upload a map image under **Offline map image**, switch
-the map background to _Offline image_, and give each site a Map X/Y (pixels) in Settings → Sites.
+### The map
+
+The overview and wall map is a live OpenStreetMap map: no image to prepare, no key. To put a site
+on it, type its **Address** in Settings → Sites and save. The worker looks the address up with
+OpenStreetMap's Nominatim, one address per second as OpenStreetMap asks. Saving shows the place
+it matched, and the site appears on the map. If a site has no address, its city is used.
+
+- **Typed coordinates win.** Type the latitude and longitude yourself if the lookup picks the
+  wrong place. To look the address up again, clear them and save.
+- **Existing sites.** **Place N sites on the map** (Settings → Sites) looks up every site that has
+  an address or city but no coordinates. Sites not yet on the map show _not on map_.
+- **Settings.** Settings → Map & wall can turn the lookup off. Its Advanced section can point it
+  at your own Nominatim or another country.
+
+For browsers without internet access, upload a map image under **Offline map image**, switch the
+map background to _Offline image_, and give each site a Map X/Y (pixels) in Settings → Sites.
 
 If MAS sits behind a reverse proxy (nginx, IIS), turn on **Behind a reverse proxy** in Settings
 → General so audit rows and wall IP limits see real client addresses.

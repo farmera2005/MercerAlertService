@@ -71,6 +71,13 @@
       "when": 1795116614071,
       "tag": "0009_site_divisions",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1795118701998,
+      "tag": "0010_site_addresses",
+      "breakpoints": true
     }
   ]
 }

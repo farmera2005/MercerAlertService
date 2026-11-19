@@ -621,6 +621,22 @@ any XYZ server); `MAP_MODE=image` uses an uploaded PNG/JPEG/WebP (Settings → M
 `setting_assets`) with `CRS.Simple` and each site's Map X/Y in pixels. Markers are coloured by
 site health, with a legend; on the wall, problem sites carry permanent name labels.
 
+**Sites from addresses.** A site's latitude and longitude come from its address, looked up by the
+worker (`sites.geocode`, `apps/worker/src/geocode.ts`) with a Nominatim-compatible service
+(`MAP_GEOCODER_URL`, OpenStreetMap's by default; `MAP_ADDRESS_LOOKUP` turns it off).
+
+- **When to look up** is decided by `planGeocode` (`core/geocode.ts`, pure), on every save. A new
+  address (or city, when there is no address) is looked up, and so is a site without coordinates.
+  Coordinates typed in the same save win (`geo_status = manual`). Other edits never move a site.
+- **The request.** The web app sets `geo_status = pending` in the save's transaction, then queues
+  the job. It waits up to 15 s for the answer, so the save message can say where the site was
+  placed.
+- **Limits.** The worker sends at most one request per second, with an application User-Agent and
+  no personal details. A failure is stored on the site and retried twice. A result is applied only
+  if the site still has the address it was looked up for (audited as `site.geocode`).
+- **Bulk.** "Place N sites on the map" queues every site with an address or city and no
+  coordinates.
+
 **Orion write-back (optional).** It needs `SWIS_WRITEBACK_ENABLED` and a separate
 write-capable account. The worker does every write; the web app never calls SWIS.
 

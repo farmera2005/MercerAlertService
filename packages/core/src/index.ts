@@ -7,6 +7,7 @@ export * from './orion';
 export * from './uri';
 export * from './mapping';
 export * from './site-groups';
+export * from './geocode';
 export * from './time';
 export * from './util';
 export * from './ingest/diff';

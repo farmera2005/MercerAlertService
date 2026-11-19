@@ -176,6 +176,12 @@ export default async function SitePage({ params }: { params: Promise<{ code: str
           <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-2 text-sm">
             <dt className="text-slate-400">Division</dt>
             <dd>{d.divisionName ?? '—'}</dd>
+            {s.address && (
+              <>
+                <dt className="text-slate-400">Address</dt>
+                <dd>{s.address}</dd>
+              </>
+            )}
             <dt className="text-slate-400">Tier</dt>
             <dd className="capitalize">{s.tier}</dd>
             <dt className="text-slate-400">Harvest-critical</dt>

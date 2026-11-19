@@ -76,7 +76,7 @@ export const SETTING_SECTIONS = {
   map: {
     title: 'Map',
     description:
-      'The overview and wall map use OpenStreetMap tiles by default. Switch to an offline image when the server has no internet access.',
+      'The overview and wall map are a live OpenStreetMap map. Sites are placed by the address (or city) in Settings → Sites. Switch to an offline image when the browsers have no internet access.',
   },
   wall: {
     title: 'Wall display',
@@ -637,7 +637,7 @@ export const SETTINGS: readonly SettingDef[] = [
     label: 'Map background',
     kind: 'select',
     options: [
-      { value: 'tiles', label: 'OpenStreetMap tiles (needs internet)' },
+      { value: 'tiles', label: 'Online map, OpenStreetMap (each browser needs internet)' },
       { value: 'image', label: 'Offline image (upload below)' },
     ],
   }),
@@ -655,6 +655,31 @@ export const SETTINGS: readonly SettingDef[] = [
     label: 'Tile attribution',
     kind: 'text',
     advanced: true,
+  }),
+  s({
+    key: 'MAP_ADDRESS_LOOKUP',
+    section: 'map',
+    label: 'Place sites from their address',
+    kind: 'bool',
+    help: 'When a site has an address (or a city) and no coordinates, the worker looks it up with OpenStreetMap Nominatim, one address per second.',
+  }),
+  s({
+    key: 'MAP_GEOCODER_URL',
+    section: 'map',
+    label: 'Address lookup server',
+    kind: 'url',
+    advanced: true,
+    placeholder: 'https://nominatim.openstreetmap.org',
+    help: 'Any Nominatim-compatible search service, such as your own Nominatim.',
+  }),
+  s({
+    key: 'MAP_GEOCODER_COUNTRIES',
+    section: 'map',
+    label: 'Look up addresses in',
+    kind: 'text',
+    advanced: true,
+    placeholder: 'us',
+    help: 'Comma-separated two-letter country codes. Empty: anywhere.',
   }),
 
   // wall

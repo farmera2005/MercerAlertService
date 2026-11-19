@@ -4,6 +4,7 @@ import { useActionState } from 'react';
 import {
   deleteSiteAction,
   mapOrionSiteValueAction,
+  placeUnplacedSitesAction,
   saveSiteAction,
   type FormState,
 } from '@/app/actions/settings';
@@ -14,6 +15,7 @@ export interface SiteView {
   code: string;
   name: string;
   divisionCodes: string[];
+  address: string | null;
   city: string | null;
   state: string | null;
   lat: number | null;
@@ -26,6 +28,10 @@ export interface SiteView {
   ownerGroup: string | null;
   contactNotes: string | null;
   profileStatus: 'placeholder' | 'auto' | 'confirmed';
+  /** Where its map position came from (see the Address field). */
+  geoStatus: 'pending' | 'ok' | 'not_found' | 'failed' | 'manual' | null;
+  geoLabel: string | null;
+  geoError: string | null;
   nodeCount: number;
   /** The SolarWinds site group this site corresponds to; its description is the site notes. */
   group: { name: string | null; notes: string | null } | null;
@@ -44,6 +50,26 @@ const WRITE_TEXT = {
   failed: 'Not saved',
   skipped: 'Not saved',
 } as const;
+
+/** What the address lookup did for this site. */
+function geoText(site: SiteView | undefined, lookupOn: boolean): string {
+  if (!lookupOn)
+    return 'Address lookup is off (Settings → Map & wall), so type the latitude and longitude.';
+  switch (site?.geoStatus) {
+    case 'ok':
+      return `On the map at: ${site.geoLabel ?? 'the address'}.`;
+    case 'pending':
+      return 'Looking up the address…';
+    case 'not_found':
+      return 'The address was not found. Check it, or type the latitude and longitude.';
+    case 'failed':
+      return `The lookup failed (${site.geoError ?? 'unknown error'}). Save again to retry.`;
+    case 'manual':
+      return 'Placed by the latitude and longitude typed below. Clear them to use the address.';
+    default:
+      return 'Places the site on the map (looked up with OpenStreetMap). Without one, the city is used.';
+  }
+}
 
 /** Where the site's notes live, and the last attempt to change them from MAS. */
 function NotesField({
@@ -138,11 +164,13 @@ function SiteForm({
   divisions,
   onDoneLabel,
   writebackEnabled,
+  addressLookup,
 }: {
   site?: SiteView;
   divisions: DivisionView[];
   onDoneLabel: string;
   writebackEnabled: boolean;
+  addressLookup: boolean;
 }) {
   const [state, action, pending] = useActionState<FormState, FormData>(saveSiteAction, {});
   const id = site ? `s${site.id}` : 'new';
@@ -191,10 +219,30 @@ function SiteForm({
             help="Every division at this location. Incidents here go to each division’s routing rules and seasons."
           />
         </div>
+        <div className="sm:col-span-2">
+          <FieldShell
+            id={`${id}-address`}
+            label="Address"
+            help={<span data-testid="geo-status">{geoText(site, addressLookup)}</span>}
+          >
+            <Input
+              id={`${id}-address`}
+              name="address"
+              autoComplete="street-address"
+              defaultValue={dv('address', site?.address)}
+              placeholder="100 W Main St, Rockford, OH 45882"
+            />
+          </FieldShell>
+        </div>
         <FieldShell id={`${id}-city`} label="City">
           <Input id={`${id}-city`} name="city" defaultValue={dv('city', site?.city)} />
         </FieldShell>
-        <FieldShell id={`${id}-lat`} label="Latitude" error={e.lat}>
+        <FieldShell
+          id={`${id}-lat`}
+          label="Latitude"
+          error={e.lat}
+          help={addressLookup ? 'Filled in from the address.' : undefined}
+        >
           <Input
             id={`${id}-lat`}
             name="lat"
@@ -285,18 +333,41 @@ function SiteForm({
   );
 }
 
+/** Look up every site that has an address (or city) but no place on the map. */
+function PlaceAll({ count }: { count: number }) {
+  const [state, action, pending] = useActionState<FormState>(placeUnplacedSitesAction, {});
+  return (
+    <form action={action} className="flex flex-wrap items-center gap-3">
+      <Button type="submit" variant="secondary" disabled={pending}>
+        {pending ? 'Queuing…' : `Place ${count} site${count === 1 ? '' : 's'} on the map`}
+      </Button>
+      <span className="text-sm text-slate-400">
+        {state.message ?? 'Sites with an address or city but no coordinates.'}
+      </span>
+    </form>
+  );
+}
+
 export function SitesPanel({
   sites,
   divisions,
   unmatched,
   writebackEnabled,
+  addressLookup,
+  unplaced,
 }: {
   sites: SiteView[];
   divisions: DivisionView[];
   unmatched: Array<{ value: string; nodes: number }>;
   writebackEnabled: boolean;
+  /** Whether the worker places sites from their address (MAP_ADDRESS_LOOKUP). */
+  addressLookup: boolean;
+  /** Sites with an address or city but no coordinates. */
+  unplaced: number;
 }) {
   const divName = new Map(divisions.map((d) => [d.code, d.name]));
+  const onMap = (s: SiteView) =>
+    (s.lat !== null && s.lon !== null) || (s.mapX !== null && s.mapY !== null);
   return (
     <div className="space-y-6">
       {unmatched.length > 0 && (
@@ -348,6 +419,7 @@ export function SitesPanel({
       <Card
         title={`Site profiles (${sites.length})`}
         description="Tier and harvest-critical drive incident priority. Placeholder sites came with the install — confirm or delete them."
+        actions={addressLookup && unplaced > 0 ? <PlaceAll count={unplaced} /> : undefined}
       >
         <ul className="divide-y divide-white/5">
           {sites.map((s) => (
@@ -364,6 +436,7 @@ export function SitesPanel({
                     {s.tier}
                   </Badge>
                   {s.harvestCritical && <Badge tone="warn">harvest-critical</Badge>}
+                  {!onMap(s) && <Badge tone="neutral">not on map</Badge>}
                   <Badge tone={STATUS_TONE[s.profileStatus]}>{s.profileStatus}</Badge>
                   {s.group && (
                     <Badge tone="info">
@@ -378,6 +451,7 @@ export function SitesPanel({
                     divisions={divisions}
                     onDoneLabel="Save site"
                     writebackEnabled={writebackEnabled}
+                    addressLookup={addressLookup}
                   />
                   <form
                     action={deleteSiteAction}
@@ -403,6 +477,7 @@ export function SitesPanel({
           divisions={divisions}
           onDoneLabel="Add site"
           writebackEnabled={writebackEnabled}
+          addressLookup={addressLookup}
         />
       </Card>
     </div>

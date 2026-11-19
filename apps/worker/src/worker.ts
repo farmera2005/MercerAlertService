@@ -11,6 +11,7 @@ import {
   WRITEBACK_ACK_QUEUE,
   WRITEBACK_NOTE_QUEUE,
   WRITEBACK_SITE_NOTES_QUEUE,
+  GEOCODE_SITE_QUEUE,
   NOTIFY_TEST_QUEUE,
   notifyTestSchema,
   AI_TEST_QUEUE,
@@ -56,6 +57,7 @@ import {
 } from './setup-jobs';
 import { SiteResolver } from './site-resolver';
 import { runWritebackAck, runWritebackNote, runWritebackSiteNotes } from './writeback';
+import { runGeocodeSite } from './geocode';
 import {
   NOTIFY_QUEUE,
   NOTIFY_TICK_SEC,
@@ -618,6 +620,18 @@ export function createWorker(bootstrap: AppConfig, opts: WorkerOptions = {}): Wo
       await boss.createQueue(WRITEBACK_SITE_NOTES_QUEUE, { retryLimit: 0, expireInSeconds: 300 });
       await boss.work(WRITEBACK_SITE_NOTES_QUEUE, async ([job]) => {
         if (job) return runWritebackSiteNotes(job.data, cfg, dbh.db, log);
+      });
+
+      // One lookup at a time (and one per second, in runGeocodeSite), as OpenStreetMap asks.
+      await boss.createQueue(GEOCODE_SITE_QUEUE, {
+        retryLimit: 2,
+        retryDelay: 30,
+        expireInSeconds: 120,
+      });
+      await boss.work(GEOCODE_SITE_QUEUE, { pollingIntervalSeconds: 0.5 }, async ([job]) => {
+        if (!job) return;
+        await reloadConfig();
+        return runGeocodeSite(job.data, cfg, dbh.db, log);
       });
 
       // Notifications run in every mode: the outbox, escalations and test-sends don't need SWIS.

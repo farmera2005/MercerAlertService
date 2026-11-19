@@ -101,6 +101,12 @@ export const envSchema = z.object({
   MAP_MODE: z.enum(['tiles', 'image']).default('tiles'),
   MAP_TILE_URL: str('https://tile.openstreetmap.org/{z}/{x}/{y}.png'),
   MAP_ATTRIBUTION: str('© OpenStreetMap contributors'),
+  /** Place sites on the map from their address (looked up by the worker). */
+  MAP_ADDRESS_LOOKUP: bool(true),
+  /** A Nominatim-compatible search service: OpenStreetMap's, or your own. */
+  MAP_GEOCODER_URL: str('https://nominatim.openstreetmap.org'),
+  /** Comma-separated ISO country codes the lookup is limited to (empty = anywhere). */
+  MAP_GEOCODER_COUNTRIES: str('us'),
   WALL_ROTATE_SEC: int(20, 5),
   WALL_SHOW_MAP: bool(true),
   /** Stay on the incident list while any P1 is open. */
@@ -274,7 +280,13 @@ export interface AppConfig {
       bootstrapAdminEmails: string[];
     } | null;
   };
-  map: { mode: 'tiles' | 'image'; tileUrl: string; attribution: string };
+  map: {
+    mode: 'tiles' | 'image';
+    tileUrl: string;
+    attribution: string;
+    /** Address lookup for site placement; null when off. */
+    geocoder: { url: string; countries: string[] } | null;
+  };
   notify: {
     shadow: { enabled: boolean; channelKey: string; allowPaging: boolean };
     quiet: {
@@ -464,6 +476,11 @@ export function loadConfig(
     err.issues = [{ key: 'MAP_TILE_URL', message: 'an http(s) URL with {z}, {x} and {y}' }];
     throw err;
   }
+  if (e.MAP_ADDRESS_LOOKUP && !/^https?:\/\/[^\s/]+/.test(e.MAP_GEOCODER_URL)) {
+    const err = new ConfigError('MAP_GEOCODER_URL must be an http(s) URL');
+    err.issues = [{ key: 'MAP_GEOCODER_URL', message: 'an http(s) URL' }];
+    throw err;
+  }
   const fail = (key: string, message: string): never => {
     const err = new ConfigError(`${key}: ${message}`);
     err.issues = [{ key, message }];
@@ -587,7 +604,19 @@ export function loadConfig(
           }
         : null,
     },
-    map: { mode: e.MAP_MODE, tileUrl: e.MAP_TILE_URL, attribution: e.MAP_ATTRIBUTION },
+    map: {
+      mode: e.MAP_MODE,
+      tileUrl: e.MAP_TILE_URL,
+      attribution: e.MAP_ATTRIBUTION,
+      geocoder: e.MAP_ADDRESS_LOOKUP
+        ? {
+            url: e.MAP_GEOCODER_URL.replace(/\/+$/, ''),
+            countries: e.MAP_GEOCODER_COUNTRIES.split(',')
+              .map((c) => c.trim().toLowerCase())
+              .filter((c) => /^[a-z]{2}$/.test(c)),
+          }
+        : null,
+    },
     notify: {
       shadow: {
         enabled: e.NOTIFY_SHADOW_MODE,
