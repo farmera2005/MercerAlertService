@@ -9,6 +9,8 @@ import {
   loadConfig,
   loadOrCreateMasterKey,
   WRITEBACK_ACK_QUEUE,
+  WRITEBACK_NOTE_QUEUE,
+  WRITEBACK_SITE_NOTES_QUEUE,
   NOTIFY_TEST_QUEUE,
   notifyTestSchema,
   AI_TEST_QUEUE,
@@ -53,7 +55,7 @@ import {
   type ConnectionInput,
 } from './setup-jobs';
 import { SiteResolver } from './site-resolver';
-import { runWritebackAck } from './writeback';
+import { runWritebackAck, runWritebackNote, runWritebackSiteNotes } from './writeback';
 import {
   NOTIFY_QUEUE,
   NOTIFY_TICK_SEC,
@@ -235,7 +237,8 @@ export function createWorker(bootstrap: AppConfig, opts: WorkerOptions = {}): Wo
     if (!boss || mode !== 'monitoring') return;
     // Topology first: it refreshes the schema probe and custom-property list.
     // Nodes before alerts, so the first correlation already knows sites and device roles.
-    const order: PollerName[] = ['topology', 'nodes', 'alerts', 'interfaces', 'events'];
+    // Groups before nodes: devices are placed in their SolarWinds site groups.
+    const order: PollerName[] = ['topology', 'groups', 'nodes', 'alerts', 'interfaces', 'events'];
     order.forEach((name, i) => {
       const queue = POLL_QUEUES[name];
       const enqueue = () => {
@@ -373,6 +376,13 @@ export function createWorker(bootstrap: AppConfig, opts: WorkerOptions = {}): Wo
       if (mode === prevMode && mode === 'monitoring')
         log.info({ pollSec: next.swis.pollSec }, 'poll intervals updated');
       schedulePolls();
+    }
+    // New site-group settings: link sites and re-place devices now, not at the next tick.
+    else if (mode === 'monitoring' && mappingKey(prev) !== mappingKey(next)) {
+      for (const queue of [POLL_QUEUES.groups, POLL_QUEUES.nodes])
+        await boss
+          ?.send(queue, {})
+          .catch((e: unknown) => log.error({ queue, err: errorMessage(e) }, 'enqueue failed'));
     }
     await scheduleDigests().catch((e: unknown) =>
       log.error({ err: errorMessage(e) }, 'could not schedule digests'),
@@ -595,6 +605,19 @@ export function createWorker(bootstrap: AppConfig, opts: WorkerOptions = {}): Wo
       });
       await boss.work(WRITEBACK_ACK_QUEUE, async ([job]) => {
         if (job) return runWritebackAck(job.data, cfg, dbh.db, log);
+      });
+      await boss.createQueue(WRITEBACK_NOTE_QUEUE, {
+        retryLimit: 2,
+        retryDelay: 15,
+        expireInSeconds: 300,
+      });
+      await boss.work(WRITEBACK_NOTE_QUEUE, async ([job]) => {
+        if (job) return runWritebackNote(job.data, cfg, dbh.db, log);
+      });
+      // Never retried: the outcome is stored on the write and shown next to the site notes.
+      await boss.createQueue(WRITEBACK_SITE_NOTES_QUEUE, { retryLimit: 0, expireInSeconds: 300 });
+      await boss.work(WRITEBACK_SITE_NOTES_QUEUE, async ([job]) => {
+        if (job) return runWritebackSiteNotes(job.data, cfg, dbh.db, log);
       });
 
       // Notifications run in every mode: the outbox, escalations and test-sends don't need SWIS.

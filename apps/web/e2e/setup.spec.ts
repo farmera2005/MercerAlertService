@@ -78,13 +78,13 @@ test('first-run setup is completed entirely in the browser', async ({ page }) =>
   await expect(page).toHaveURL(/welcome=1/);
   await expect(page.getByText('Monitoring started')).toBeVisible();
 
-  // Health reports a configured system whose five pollers have all succeeded.
+  // Health reports a configured system whose six pollers have all succeeded.
   await expect(async () => {
     const health = await (await page.request.get('/api/health')).json();
     expect(health.worker.mode).toBe('monitoring');
     expect(
       (health.pollers as Array<{ lastSuccessAt: string | null }>).filter((p) => p.lastSuccessAt),
-    ).toHaveLength(5);
+    ).toHaveLength(6);
   }).toPass({ timeout: 90_000 });
 });
 

@@ -243,6 +243,22 @@ export const SETTINGS: readonly SettingDef[] = [
   }),
 
   // mapping
+  s({
+    key: 'SITE_GROUP_PARENT',
+    section: 'mapping',
+    label: 'Sites are the sub-groups of this SolarWinds group',
+    kind: 'text',
+    placeholder: 'e.g. Locations',
+    help: 'Exact group name. Each group inside it is one site, and a device belongs to the site whose group (or a group nested in it) contains it. Group descriptions are the site notes. Leave empty to use only the name pattern below, or neither to place devices by custom property.',
+  }),
+  s({
+    key: 'SITE_GROUP_PATTERN',
+    section: 'mapping',
+    label: 'Site group names (regex)',
+    kind: 'regex',
+    placeholder: '^Site - (.+)$',
+    help: 'Groups whose names match are sites (inside the group above, if set). The first capture group, if any, is the site name: "Site - Rockford" → Rockford.',
+  }),
   s({ key: 'CP_SITE_FIELD', section: 'mapping', label: 'Site custom property', kind: 'text' }),
   s({
     key: 'CP_DIVISION_FIELD',
@@ -300,6 +316,13 @@ export const SETTINGS: readonly SettingDef[] = [
     label: 'Events & alert history (seconds)',
     kind: 'int',
     min: 30,
+  }),
+  s({
+    key: 'SWIS_POLL_GROUPS_SEC',
+    section: 'polling',
+    label: 'Groups, site groups and site notes (seconds)',
+    kind: 'int',
+    min: 60,
   }),
   s({
     key: 'SWIS_POLL_TOPOLOGY_SEC',

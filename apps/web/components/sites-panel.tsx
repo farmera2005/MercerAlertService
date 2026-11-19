@@ -7,7 +7,7 @@ import {
   saveSiteAction,
   type FormState,
 } from '@/app/actions/settings';
-import { Alert, Badge, Button, Card, FieldShell, Input, Select } from './ui';
+import { Alert, Badge, Button, Card, FieldShell, Input, Select, Textarea } from './ui';
 
 export interface SiteView {
   id: number;
@@ -27,6 +27,103 @@ export interface SiteView {
   contactNotes: string | null;
   profileStatus: 'placeholder' | 'auto' | 'confirmed';
   nodeCount: number;
+  /** The SolarWinds site group this site corresponds to; its description is the site notes. */
+  group: { name: string | null; notes: string | null } | null;
+  notesWrite: {
+    status: 'pending' | 'ok' | 'conflict' | 'failed' | 'skipped';
+    error: string | null;
+    at: string;
+    by: string;
+  } | null;
+}
+
+const WRITE_TEXT = {
+  pending: 'Saving to SolarWinds…',
+  ok: 'Saved to SolarWinds',
+  conflict: 'Not saved',
+  failed: 'Not saved',
+  skipped: 'Not saved',
+} as const;
+
+/** Where the site's notes live, and the last attempt to change them from MAS. */
+function NotesField({
+  site,
+  id,
+  writebackEnabled,
+  error,
+  value,
+}: {
+  site?: SiteView;
+  id: string;
+  writebackEnabled: boolean;
+  error?: string;
+  value: (key: string, fallback: string | null | undefined) => string | number | undefined;
+}) {
+  if (site?.group) {
+    const w = site.notesWrite;
+    const groupName = site.group.name ?? 'missing in SolarWinds';
+    return (
+      <div className="sm:col-span-3" data-testid={`site-notes-${site.code}`}>
+        <FieldShell
+          id={`${id}-notes`}
+          label="Notes"
+          error={error}
+          help={
+            writebackEnabled
+              ? `Stored in SolarWinds as the description of the group “${groupName}”. Changes are written there with the write-back account.`
+              : `Stored in SolarWinds as the description of the group “${groupName}”. Edit them there, or turn on Orion write-back (Settings → SolarWinds) to edit them here.`
+          }
+        >
+          <input type="hidden" name="groupNotesBase" value={site.group.notes ?? ''} />
+          <Textarea
+            id={`${id}-notes`}
+            name="groupNotes"
+            rows={4}
+            maxLength={4000}
+            readOnly={!writebackEnabled || w?.status === 'pending'}
+            defaultValue={String(value('groupNotes', site.group.notes) ?? '')}
+          />
+        </FieldShell>
+        {w && w.status !== 'ok' && (
+          <p
+            className={`mt-1 text-xs ${w.status === 'pending' ? 'text-slate-400' : 'text-amber-300'}`}
+            data-testid="site-notes-write"
+            data-status={w.status}
+          >
+            {WRITE_TEXT[w.status]}
+            {w.error ? `: ${w.error}` : ''} ({w.by}, {new Date(w.at).toLocaleString('en-US')})
+          </p>
+        )}
+        {w?.status === 'ok' && (
+          <p
+            className="mt-1 text-xs text-slate-500"
+            data-testid="site-notes-write"
+            data-status="ok"
+          >
+            {WRITE_TEXT.ok} by {w.by}, {new Date(w.at).toLocaleString('en-US')}.
+          </p>
+        )}
+      </div>
+    );
+  }
+  return (
+    <div className="sm:col-span-3">
+      <FieldShell
+        id={`${id}-notes`}
+        label="Notes"
+        error={error}
+        help="Kept in MAS. Sites that come from SolarWinds groups keep their notes in the group description."
+      >
+        <Textarea
+          id={`${id}-notes`}
+          name="contactNotes"
+          rows={3}
+          maxLength={4000}
+          defaultValue={String(value('contactNotes', site?.contactNotes) ?? '')}
+        />
+      </FieldShell>
+    </div>
+  );
 }
 
 export interface DivisionView {
@@ -40,10 +137,12 @@ function SiteForm({
   site,
   divisions,
   onDoneLabel,
+  writebackEnabled,
 }: {
   site?: SiteView;
   divisions: DivisionView[];
   onDoneLabel: string;
+  writebackEnabled: boolean;
 }) {
   const [state, action, pending] = useActionState<FormState, FormData>(saveSiteAction, {});
   const id = site ? `s${site.id}` : 'new';
@@ -55,8 +154,20 @@ function SiteForm({
     <form action={action} className="space-y-4" noValidate>
       {site && <input type="hidden" name="id" value={site.id} />}
       <div className="grid gap-4 sm:grid-cols-3">
-        <FieldShell id={`${id}-name`} label="Name" error={e.name}>
-          <Input id={`${id}-name`} name="name" defaultValue={dv('name', site?.name)} required />
+        <FieldShell
+          id={`${id}-name`}
+          label="Name"
+          error={e.name}
+          help={site?.group ? 'Follows the SolarWinds group name.' : undefined}
+        >
+          <Input
+            id={`${id}-name`}
+            name="name"
+            defaultValue={dv('name', site?.name)}
+            readOnly={!!site?.group}
+            className={site?.group ? 'text-slate-400' : undefined}
+            required
+          />
         </FieldShell>
         <FieldShell id={`${id}-div`} label="Division">
           <Select
@@ -147,6 +258,13 @@ function SiteForm({
             defaultValue={dv('ownerGroup', site?.ownerGroup)}
           />
         </FieldShell>
+        <NotesField
+          site={site}
+          id={id}
+          writebackEnabled={writebackEnabled}
+          error={e.groupNotes}
+          value={dv}
+        />
       </div>
       <input type="hidden" name="state" value={site?.state ?? 'OH'} />
       <label className="flex items-center gap-2 text-sm">
@@ -170,10 +288,12 @@ export function SitesPanel({
   sites,
   divisions,
   unmatched,
+  writebackEnabled,
 }: {
   sites: SiteView[];
   divisions: DivisionView[];
   unmatched: Array<{ value: string; nodes: number }>;
+  writebackEnabled: boolean;
 }) {
   const divName = new Map(divisions.map((d) => [d.code, d.name]));
   return (
@@ -249,10 +369,20 @@ export function SitesPanel({
                   </Badge>
                   {s.harvestCritical && <Badge tone="warn">harvest-critical</Badge>}
                   <Badge tone={STATUS_TONE[s.profileStatus]}>{s.profileStatus}</Badge>
+                  {s.group && (
+                    <Badge tone="info">
+                      {s.group.name ? 'SolarWinds group' : 'SolarWinds group missing'}
+                    </Badge>
+                  )}
                   <span className="text-xs text-slate-500">{s.nodeCount} nodes</span>
                 </summary>
                 <div className="mt-4 space-y-4 rounded-lg border border-white/10 p-4">
-                  <SiteForm site={s} divisions={divisions} onDoneLabel="Save site" />
+                  <SiteForm
+                    site={s}
+                    divisions={divisions}
+                    onDoneLabel="Save site"
+                    writebackEnabled={writebackEnabled}
+                  />
                   <form
                     action={deleteSiteAction}
                     onSubmit={(e) => {
@@ -273,7 +403,11 @@ export function SitesPanel({
       </Card>
 
       <Card title="Add a site">
-        <SiteForm divisions={divisions} onDoneLabel="Add site" />
+        <SiteForm
+          divisions={divisions}
+          onDoneLabel="Add site"
+          writebackEnabled={writebackEnabled}
+        />
       </Card>
     </div>
   );

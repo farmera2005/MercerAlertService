@@ -20,6 +20,7 @@ export default defineConfig({
     { name: 'dashboard', testMatch: /dashboard\.spec\.ts/, dependencies: ['setup'] },
     { name: 'ai', testMatch: /ai\.spec\.ts/, dependencies: ['dashboard'] },
     { name: 'polish', testMatch: /polish\.spec\.ts/, dependencies: ['ai'] },
+    { name: 'sites', testMatch: /site-groups\.spec\.ts/, dependencies: ['polish'] },
   ],
   use: {
     baseURL: process.env.E2E_BASE_URL ?? 'http://localhost:3000',

@@ -63,6 +63,40 @@ describe('buildTimeline', () => {
     expect(out[4]!.actor).toBe('Adam F');
   });
 
+  it("skips the acks and notes MAS itself wrote to Orion, but keeps people's", () => {
+    const out = buildTimeline({
+      incidentEvents: [],
+      transitions: [],
+      orionEvents: [],
+      alertHistory: [
+        {
+          at: new Date(Date.UTC(2026, 9, 14, 14, 1)),
+          eventType: 2,
+          message: 'Acknowledged in MercerAlertService by Adam F (INC-7)',
+          accountId: 'svc-mas-rw',
+          label: 'ROCK-SW01',
+        },
+        {
+          at: new Date(Date.UTC(2026, 9, 14, 14, 2)),
+          eventType: 3,
+          message: 'Fiber cut, Spectrum ticket 123\n— Adam F in MercerAlertService (INC-7)',
+          accountId: 'svc-mas-rw',
+          label: 'ROCK-SW01',
+        },
+        {
+          at: new Date(Date.UTC(2026, 9, 14, 14, 3)),
+          eventType: 3,
+          message: 'Called the elevator manager',
+          accountId: 'jsmith',
+          label: 'ROCK-SW01',
+        },
+      ],
+    });
+    expect(out.map((e) => e.text)).toEqual([
+      'Note in Orion — ROCK-SW01: Called the elevator manager',
+    ]);
+  });
+
   it('keeps the most recent entries when over the limit', () => {
     const events = Array.from({ length: 10 }, (_, i) => ({
       at: new Date(Date.UTC(2026, 9, 14, 14, i)),

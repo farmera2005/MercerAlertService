@@ -53,6 +53,7 @@ export interface SwisClientStats {
 
 const QUERY_PATH = '/SolarWinds/InformationService/v3/Json/Query';
 const INVOKE_PATH = '/SolarWinds/InformationService/v3/Json/Invoke';
+const JSON_PATH = '/SolarWinds/InformationService/v3/Json';
 const INSECURE_REMINDER_MS = 10 * 60_000;
 const TLS_ERROR_CODES = new Set([
   'DEPTH_ZERO_SELF_SIGNED_CERT',
@@ -225,6 +226,25 @@ export class SwisClient {
       retries: 0,
       ...call,
       label: call.label ?? `${entity}.${verb}`,
+    });
+  }
+
+  /**
+   * Update properties of one entity (SWIS CRUD), e.g. a group's Description:
+   * update('swis://orion/Orion/Orion.Groups/ContainerID=5', { Description: '…' }).
+   */
+  async update(
+    uri: string,
+    properties: Record<string, string | number | boolean | null>,
+    call: CallOptions = {},
+  ): Promise<void> {
+    if (!/^swis:\/\/[A-Za-z0-9.-]+\/Orion\/[A-Za-z0-9_./=]+$/.test(uri)) {
+      throw new Error('invalid SWIS entity URI');
+    }
+    await this.call(`${JSON_PATH}/${uri}`, properties, {
+      retries: 0,
+      ...call,
+      label: call.label ?? 'update',
     });
   }
 

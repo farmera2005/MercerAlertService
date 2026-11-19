@@ -145,24 +145,27 @@ active job per queue. A slow SWIS therefore can never pile up overlapping polls,
 several worker replicas cannot double-poll. Wall-clock jobs use pg-boss cron with the
 `America/New_York` time zone.
 
-| Queue                  | Trigger                                                                                                                 | Policy    | Milestone |
-| ---------------------- | ----------------------------------------------------------------------------------------------------------------------- | --------- | --------- |
-| `swis.poll.alerts`     | every 30 s                                                                                                              | stately   | M1        |
-| `swis.poll.nodes`      | every 60 s                                                                                                              | stately   | M1        |
-| `swis.poll.interfaces` | every 180 s                                                                                                             | stately   | M1        |
-| `swis.poll.events`     | every 300 s                                                                                                             | stately   | M1        |
-| `swis.poll.topology`   | every 3600 s, and at startup                                                                                            | stately   | M1        |
-| `maint.retention`      | cron `15 3 * * *` ET                                                                                                    | singleton | M1        |
-| `correlate.run`        | after any poll that produced transitions, plus every 30 s (lifecycle: hold-down, reopen/close, snooze, maintenance)     | stately   | M2 ✓      |
-| `swis.writeback.ack`   | when someone acknowledges in MAS and `SWIS_WRITEBACK_ENABLED` is on (2 retries)                                         | standard  | M3 ✓      |
-| `notify.run`           | after each correlation cycle, when the dashboard changes an incident, and every 15 s: dispatch, due escalations, outbox | stately   | M4 ✓      |
-| `notify.test`          | Settings → Send test (the web request waits for the result)                                                             | standard  | M4 ✓      |
-| `ai.incident.summary`  | after each correlation cycle and every 30 s, per incident that needs it (`singletonKey`, `startAfter` 45 s)             | stately   | M5 ✓      |
-| `ai.digest.daily`      | cron `DIGEST_DAILY_CRON` (`0 7 * * *` ET), or Settings → Digests → Send now                                             | singleton | M5 ✓      |
-| `ai.digest.weekly`     | cron `DIGEST_WEEKLY_CRON` (`30 7 * * 1` ET), or Send now                                                                | singleton | M5 ✓      |
-| `ai.test`              | Settings → AI → Test (the web request waits for the result)                                                             | standard  | M5 ✓      |
-| `ai.chat`              | each "Ask the network" question (3 in parallel per worker; stale pending answers are failed after 6 min)                | standard  | M6 ✓      |
-| `maint.selfcheck`      | every 60 s: failing notifiers, overdue outbox, correlation backlog                                                      | singleton | M4 ✓      |
+| Queue                       | Trigger                                                                                                                 | Policy    | Milestone |
+| --------------------------- | ----------------------------------------------------------------------------------------------------------------------- | --------- | --------- |
+| `swis.poll.alerts`          | every 30 s                                                                                                              | stately   | M1        |
+| `swis.poll.nodes`           | every 60 s                                                                                                              | stately   | M1        |
+| `swis.poll.interfaces`      | every 180 s                                                                                                             | stately   | M1        |
+| `swis.poll.events`          | every 300 s                                                                                                             | stately   | M1        |
+| `swis.poll.groups`          | every 300 s: groups, members, site-group links and site notes (group descriptions)                                      | stately   | ✓         |
+| `swis.poll.topology`        | every 3600 s, and at startup                                                                                            | stately   | M1        |
+| `maint.retention`           | cron `15 3 * * *` ET                                                                                                    | singleton | M1        |
+| `correlate.run`             | after any poll that produced transitions, plus every 30 s (lifecycle: hold-down, reopen/close, snooze, maintenance)     | stately   | M2 ✓      |
+| `swis.writeback.ack`        | when someone acknowledges in MAS and `SWIS_WRITEBACK_ENABLED` is on (2 retries)                                         | standard  | M3 ✓      |
+| `swis.writeback.note`       | when someone adds a note to an incident with active Orion alerts (`AppendNote`, 2 retries)                              | standard  | ✓         |
+| `swis.writeback.site-notes` | when site notes of a site linked to a SolarWinds group are edited in MAS (no retries; outcome in `site_notes_writes`)   | standard  | ✓         |
+| `notify.run`                | after each correlation cycle, when the dashboard changes an incident, and every 15 s: dispatch, due escalations, outbox | stately   | M4 ✓      |
+| `notify.test`               | Settings → Send test (the web request waits for the result)                                                             | standard  | M4 ✓      |
+| `ai.incident.summary`       | after each correlation cycle and every 30 s, per incident that needs it (`singletonKey`, `startAfter` 45 s)             | stately   | M5 ✓      |
+| `ai.digest.daily`           | cron `DIGEST_DAILY_CRON` (`0 7 * * *` ET), or Settings → Digests → Send now                                             | singleton | M5 ✓      |
+| `ai.digest.weekly`          | cron `DIGEST_WEEKLY_CRON` (`30 7 * * 1` ET), or Send now                                                                | singleton | M5 ✓      |
+| `ai.test`                   | Settings → AI → Test (the web request waits for the result)                                                             | standard  | M5 ✓      |
+| `ai.chat`                   | each "Ask the network" question (3 in parallel per worker; stale pending answers are failed after 6 min)                | standard  | M6 ✓      |
+| `maint.selfcheck`           | every 60 s: failing notifiers, overdue outbox, correlation backlog                                                      | singleton | M4 ✓      |
 
 ## 5. SWIS integration
 
@@ -617,10 +620,35 @@ any XYZ server); `MAP_MODE=image` uses an uploaded PNG/JPEG/WebP (Settings → M
 `setting_assets`) with `CRS.Simple` and each site's Map X/Y in pixels. Markers are coloured by
 site health, with a legend; on the wall, problem sites carry permanent name labels.
 
-**Orion write-back (optional).** With `SWIS_WRITEBACK_ENABLED` and a separate write-capable
-account, acknowledging in MAS queues `swis.writeback.ack`; the worker calls
-`Orion.AlertActive.Acknowledge` for the incident's active, not-yet-acknowledged Orion alerts and
-records the result on the timeline and in the audit log. The web app never calls SWIS.
+**Orion write-back (optional).** It needs `SWIS_WRITEBACK_ENABLED` and a separate
+write-capable account. The worker does every write; the web app never calls SWIS.
+
+- **Acknowledging in MAS** queues `swis.writeback.ack`. The worker calls
+  `Orion.AlertActive.Acknowledge` for the incident's active, not-yet-acknowledged Orion alerts.
+- **A note on an incident** queues `swis.writeback.note`, which appends it to those alerts
+  (`AppendNote`).
+- **Editing the notes of a site linked to a SolarWinds group** queues
+  `swis.writeback.site-notes`, which writes the group description (below).
+
+Results go on the timeline or next to the notes, and in the audit log.
+
+**Sites from SolarWinds groups.** Set `SITE_GROUP_PARENT` (its sub-groups are the sites) and/or
+`SITE_GROUP_PATTERN` (a name regex whose first capture group is the site name, e.g.
+`^Site - (.+)$`). Then each matching group is one Site Profile, linked by
+`sites.orion_container_id`:
+
+- **Linking.** After every groups poll, the worker links a site group to an existing site
+  matched by name, code or alias, or creates one when `SITE_AUTO_CREATE` is on. When the group
+  is renamed, the site follows and keeps its old name as an alias. Each change is audited
+  (`site.group_link`, `site.group_rename`, `site.auto_create`).
+- **Placing devices.** A device belongs to the site group that contains it, directly or
+  through nested groups. If it is in several, the closest group wins, then the lowest ID, and
+  the overlap is logged. Resolution order: admin override → site group → Site custom property
+  → hostname prefix.
+- **Notes.** A linked site's notes are its group's description. MAS shows the polled value,
+  and an edit in MAS is written there by the worker. The worker reads the description first
+  and refuses with `conflict` if it changed in SolarWinds since the person loaded it.
+  Unlinked sites keep MAS-only notes (`contact_notes`).
 
 ## 10b. Configuration & first-run setup
 

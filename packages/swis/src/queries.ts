@@ -354,6 +354,20 @@ export const DISCOVERY = {
   verbArguments:
     'SELECT va.VerbName AS VerbName, va.Position AS Position, va.Name AS Name, va.Type AS Type ' +
     'FROM Metadata.VerbArgument va WHERE va.EntityName = @entity ORDER BY va.VerbName, va.Position',
+  /** Whether SWIS allows updating an entity's properties (site notes → group description). */
+  entityCanUpdate:
+    'SELECT e.FullName AS FullName, e.CanUpdate AS CanUpdate FROM Metadata.Entity e WHERE e.FullName = @entity',
   sampleTimestamps:
     'SELECT TOP 3 aa.AlertActiveID AS AlertActiveID, aa.TriggeredDateTime AS TriggeredDateTime FROM Orion.AlertActive aa ORDER BY aa.AlertActiveID DESC',
+};
+
+// ---------------------------------------------------------------------------------------------
+// Write-back (worker, with the write-capable account)
+// ---------------------------------------------------------------------------------------------
+
+export const WRITEBACK = {
+  /** One group, read just before and after writing its description (site notes). */
+  groupById:
+    'SELECT c.ContainerID AS ContainerID, c.Name AS Name, c.Description AS Description, c.Uri AS Uri ' +
+    'FROM Orion.Container c WHERE c.ContainerID = @id',
 };

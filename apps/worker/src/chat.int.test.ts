@@ -83,7 +83,7 @@ describe.skipIf(!url)('Ask the network (integration)', () => {
     };
     worker = createWorker(loadConfig(env), { scheduling: false, log: silent, env });
     await worker.start();
-    for (const p of ['topology', 'nodes', 'interfaces', 'alerts', 'events'] as const)
+    for (const p of ['topology', 'groups', 'nodes', 'interfaces', 'alerts', 'events'] as const)
       await worker.pollOnce(p);
     await worker.correlateOnce({ reconcile: true });
     mock.applyScenario('site-wan-down', { site: 'ROCK', childAlerts: 10 });

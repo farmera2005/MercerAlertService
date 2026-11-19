@@ -34,6 +34,10 @@ export interface DiscoveryReport {
   counts: Record<string, number | string>;
   alertConfigs: Array<{ alertId: number; name: string; severity: string; enabled: unknown }>;
   acknowledgeVerb: Array<{ verb: string; position: number; name: string; type: string }>;
+  /** Orion.AlertActive.AppendNote, used to copy MAS incident notes onto alerts. */
+  appendNoteVerb: Array<{ verb: string; position: number; name: string; type: string }>;
+  /** Whether group properties (the description = site notes) can be written over SWIS. */
+  groupsUpdatable: boolean | null;
   queryChecks: Array<{ query: string; ok: boolean; error?: string; sample?: unknown }>;
   errors: Array<{ step: string; error: string }>;
 }
@@ -54,6 +58,8 @@ export async function runDiscovery(
     counts: {},
     alertConfigs: [],
     acknowledgeVerb: [],
+    appendNoteVerb: [],
+    groupsUpdatable: null,
     queryChecks: [],
     errors: [],
   };
@@ -171,9 +177,20 @@ export async function runDiscovery(
         entity: 'Orion.AlertActive',
       },
     );
-    report.acknowledgeVerb = rows
-      .filter((r) => r.VerbName === 'Acknowledge')
-      .map((r) => ({ verb: r.VerbName, position: r.Position, name: r.Name, type: r.Type }));
+    const pick = (verb: string) =>
+      rows
+        .filter((r) => r.VerbName === verb)
+        .map((r) => ({ verb: r.VerbName, position: r.Position, name: r.Name, type: r.Type }));
+    report.acknowledgeVerb = pick('Acknowledge');
+    report.appendNoteVerb = pick('AppendNote');
+  });
+
+  await step('groupsUpdatable', async () => {
+    const rows = await q<{ FullName: string; CanUpdate?: unknown }>(DISCOVERY.entityCanUpdate, {
+      entity: 'Orion.Container',
+    });
+    const v = rows[0]?.CanUpdate;
+    report.groupsUpdatable = v === undefined || v === null ? null : v === true || v === 'true';
   });
 
   if (opts.checkQueries) {

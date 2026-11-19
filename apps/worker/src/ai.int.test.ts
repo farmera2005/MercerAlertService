@@ -89,7 +89,7 @@ describe.skipIf(!url)('AI layer (integration)', () => {
       );
     worker = createWorker(loadConfig(env), { scheduling: false, log: silent, env, now });
     await worker.start();
-    for (const p of ['topology', 'nodes', 'interfaces', 'alerts', 'events'] as const)
+    for (const p of ['topology', 'groups', 'nodes', 'interfaces', 'alerts', 'events'] as const)
       await worker.pollOnce(p);
     await worker.correlateOnce({ reconcile: true });
     await worker.notifyOnce();

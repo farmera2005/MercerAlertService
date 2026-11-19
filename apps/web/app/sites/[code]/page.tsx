@@ -1,7 +1,7 @@
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { siteHealth, type DeviceRole, type StatusNorm } from '@mercer/core';
-import { getSiteDetail } from '@mercer/db';
+import { getSiteDetail, siteGroupInfo } from '@mercer/db';
 import { IncidentRows } from '@/components/incident-rows';
 import { Shell } from '@/components/shell';
 import { LevelIcon, NodeStatus, ROLE_LABEL, fmtTime, pct, ifaceLabel } from '@/components/status';
@@ -29,6 +29,7 @@ export default async function SitePage({ params }: { params: Promise<{ code: str
   const code = decodeURIComponent((await params).code);
   const cfg = await effectiveConfig();
   const d = await getSiteDetail(server().db.db, code);
+  const group = d ? (await siteGroupInfo(server().db.db, [d.site.id])).get(d.site.id) : undefined;
   if (!d) notFound();
   const s = d.site;
   const health = siteHealth(
@@ -196,8 +197,19 @@ export default async function SitePage({ params }: { params: Promise<{ code: str
               {s.profileStatus} · updated {fmtTime(s.updatedAt, cfg.timezone)}
             </dd>
           </dl>
-          {s.contactNotes && (
-            <p className="mt-4 whitespace-pre-wrap text-sm text-slate-300">{s.contactNotes}</p>
+          {group ? (
+            <div className="mt-4" data-testid="site-notes">
+              <p className="whitespace-pre-wrap text-sm text-slate-300">
+                {group.description?.trim() || 'No notes yet.'}
+              </p>
+              <p className="mt-1 text-xs text-slate-500">
+                From SolarWinds: the description of the group “{group.groupName ?? 'missing'}”.
+              </p>
+            </div>
+          ) : (
+            s.contactNotes && (
+              <p className="mt-4 whitespace-pre-wrap text-sm text-slate-300">{s.contactNotes}</p>
+            )
           )}
           {user.isAdmin && (
             <p className="mt-4 text-sm">

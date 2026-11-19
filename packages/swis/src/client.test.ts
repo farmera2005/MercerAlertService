@@ -14,6 +14,7 @@ import {
 } from './errors';
 import { SwisFetcher } from './fetch';
 import { SchemaProbe } from './probe';
+import { WRITEBACK } from './queries';
 
 const silent = {
   info() {},
@@ -194,6 +195,31 @@ describe('SwisClient + SwisFetcher against mock SWIS', () => {
     const objectId = Number(mock.world.alertActive[0]!.AlertObjectID);
     await c.invoke('Orion.AlertActive', 'Acknowledge', [[objectId], 'ack from test']);
     expect(mock.world.alertActive[0]!.Acknowledged).toBe(true);
+    await c.close();
+  });
+
+  it('updates a group description and reads it back', async () => {
+    const c = client(mock);
+    const g = mock.world.groups[0]!;
+    await c.update(String(g.Uri), { Description: 'Generator on site' });
+    const [row] = await c.query<{ Description: string }>(WRITEBACK.groupById, {
+      id: Number(g.ContainerID),
+    });
+    expect(row!.Description).toBe('Generator on site');
+    await expect(c.update('https://evil.example/x', { Description: 'x' })).rejects.toThrow(
+      'invalid SWIS entity URI',
+    );
+    await c.close();
+  });
+
+  it('appends a note to active alerts', async () => {
+    const c = client(mock);
+    const objectId = Number(mock.world.alertActive[0]!.AlertObjectID);
+    const before = mock.world.alertHistory.length;
+    await c.invoke('Orion.AlertActive', 'AppendNote', [[objectId], 'note from test']);
+    expect(mock.world.alertHistory.slice(before)).toMatchObject([
+      { EventType: 3, Message: 'note from test' },
+    ]);
     await c.close();
   });
 });

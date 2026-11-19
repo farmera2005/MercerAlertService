@@ -1,8 +1,20 @@
 import 'server-only';
-import { INTERNAL_SETTING_KEYS, normalizeKey } from '@mercer/core';
-import { getInternalSetting, listDivisions, listSites } from '@mercer/db';
+import {
+  INTERNAL_SETTING_KEYS,
+  nodeSiteGroups,
+  normalizeKey,
+  selectSiteGroups,
+} from '@mercer/core';
+import {
+  getInternalSetting,
+  latestSiteNotesWrites,
+  listDivisions,
+  listSites,
+  loadGroupMirror,
+  siteGroupInfo,
+} from '@mercer/db';
 import type { DiscoveryReport } from '@mercer/swis/setup-contract';
-import { MappingPanel } from '@/components/mapping-panel';
+import { MappingPanel, type SiteGroupPreview } from '@/components/mapping-panel';
 import { OrionPanel } from '@/components/orion-panel';
 import { SettingsForm } from '@/components/settings-form';
 import { SitesPanel, type SiteView } from '@/components/sites-panel';
@@ -55,12 +67,41 @@ function siteKeys(sites: Awaited<ReturnType<typeof listSites>>) {
   return out;
 }
 
+/** Which SolarWinds groups the saved settings treat as sites, with their MAS site. */
+async function siteGroupPreview(
+  mapping: { siteGroupParent: string | null; siteGroupPattern: string | null } | undefined,
+  sites: Array<{ name: string; orionContainerId: number | null }>,
+): Promise<SiteGroupPreview> {
+  const { groups, members } = await loadGroupMirror(server().db.db);
+  const cfg = {
+    parent: mapping?.siteGroupParent ?? null,
+    pattern: mapping?.siteGroupPattern ?? null,
+  };
+  const selected = selectSiteGroups(groups, members, cfg);
+  const { byNode } = nodeSiteGroups(selected, members);
+  const devices = new Map<number, number>();
+  for (const cid of byNode.values()) devices.set(cid, (devices.get(cid) ?? 0) + 1);
+  const linked = new Map(
+    sites.filter((s) => s.orionContainerId !== null).map((s) => [s.orionContainerId!, s.name]),
+  );
+  return {
+    groupsPolled: groups.length,
+    rows: selected.map((g) => ({
+      groupName: g.groupName,
+      siteName: g.siteName,
+      devices: devices.get(g.containerId) ?? 0,
+      linkedSite: linked.get(g.containerId) ?? null,
+    })),
+  };
+}
+
 export async function MappingContent() {
   const [state, discovery, sites] = await Promise.all([
     getSettingsState(),
     lastDiscovery(),
     listSites(server().db.db),
   ]);
+  const siteGroups = await siteGroupPreview(state.cfg?.mapping, sites);
   return (
     <div className="space-y-6">
       <ConfigProblem error={state.configError} />
@@ -68,6 +109,7 @@ export async function MappingContent() {
         fields={sectionFields('mapping', state)}
         discovery={discovery}
         sites={siteKeys(sites)}
+        siteGroups={siteGroups}
       />
     </div>
   );
@@ -92,11 +134,33 @@ export async function SitesContent() {
         !known.has(normalizeKey(String(v.value))),
     )
     .map((v) => ({ value: String(v.value), nodes: v.nodes }));
+  const ids = sites.map((s) => s.id);
+  const [groups, writes] = await Promise.all([
+    siteGroupInfo(db.db, ids),
+    latestSiteNotesWrites(db.db, ids),
+  ]);
   return (
     <SitesPanel
-      sites={sites.map((s): SiteView => ({ ...s, nodeCount: s.nodeCount }))}
+      sites={sites.map((s): SiteView => {
+        const g = groups.get(s.id);
+        const w = writes.get(s.id);
+        return {
+          ...s,
+          nodeCount: s.nodeCount,
+          group: g ? { name: g.groupName, notes: g.description } : null,
+          notesWrite: w
+            ? {
+                status: w.status,
+                error: w.error,
+                at: (w.completedAt ?? w.createdAt).toISOString(),
+                by: w.requestedBy,
+              }
+            : null,
+        };
+      })}
       divisions={divisions.map((d) => ({ code: d.code, name: d.name }))}
       unmatched={unmatched}
+      writebackEnabled={!!state.cfg?.swis.writeback.enabled}
     />
   );
 }

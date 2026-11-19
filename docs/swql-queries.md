@@ -124,9 +124,14 @@ Required: `InterfaceID, NodeID, Status`.
 A status change produces an `interface status` transition. Each poll also folds into
 `interface_metrics_5m`.
 
-## Q4–Q8. Topology, dependencies, groups, alert definitions: hourly (`SWIS_POLL_TOPOLOGY_SEC`) and at startup
+## Q4–Q8. Topology, dependencies, groups, alert definitions
 
-Each of these is a full replace inside a single transaction.
+Q4, Q5 and Q8 run hourly (`SWIS_POLL_TOPOLOGY_SEC`) and at startup. Q6 and Q7 (groups) have
+their own poller, every 300 s (`SWIS_POLL_GROUPS_SEC`). Sites can correspond to SolarWinds
+groups (`SITE_GROUP_PARENT` / `SITE_GROUP_PATTERN`), with the group description as the site
+notes, so membership and notes need to be fresh. Each of these is a full replace inside a
+single transaction; groups and members are replaced together, and a 400/403 on either keeps
+the previous mirror.
 
 ```sql
 -- Q4 Orion.TopologyConnections (L2/L3 links from NPM topology: CDP/LLDP/bridge tables)
@@ -262,7 +267,9 @@ WHERE p.EntityName IN (@e0, @e1, @e2, …)
 - Counts for topology connections, dependencies and groups, so we know whether Orion has
   dependencies and topology configured.
 - `Metadata.Verb` / `Metadata.VerbArgument` for `Orion.AlertActive`: confirms the
-  `Acknowledge` signature before write-back is enabled.
+  `Acknowledge` and `AppendNote` signatures before write-back is enabled.
+- `SELECT e.FullName AS FullName, e.CanUpdate AS CanUpdate FROM Metadata.Entity e WHERE e.FullName = @entity`
+  with `Orion.Container`: whether group descriptions (site notes) can be written over SWIS.
 
 ## Write-back (feature flag, separate account)
 
@@ -279,3 +286,35 @@ not retried by the client (pg-boss retries the job twice); every success is writ
 audit log and every attempt to the incident timeline. The next alerts poll sees
 `Acknowledged = 1` and records an `acked` transition, so a second acknowledgement finds nothing
 to do.
+
+### Incident notes → alert notes
+
+```
+POST /SolarWinds/InformationService/v3/Json/Invoke/Orion.AlertActive/AppendNote
+Body: [[<AlertObjectID>, …], "<note>\n— <user> in MercerAlertService (INC-1042)"]
+```
+
+Queue `swis.writeback.note`, same flag and account. Sent when someone adds a note to an
+incident that has active Orion alerts. The success and any failure go on the incident timeline,
+and the success also goes in the audit log. When Orion's alert history (Q10) later returns these
+notes (`EventType = 3`), and the acknowledgements MAS wrote (`EventType = 2`), the timeline
+skips them by their MAS signature, so they don't repeat once per alert.
+
+### Site notes → group description
+
+```sql
+-- W1: read the group just before and after writing (WRITEBACK.groupById)
+SELECT c.ContainerID AS ContainerID, c.Name AS Name, c.Description AS Description, c.Uri AS Uri
+FROM Orion.Container c WHERE c.ContainerID = @id
+```
+
+```
+POST /SolarWinds/InformationService/v3/Json/swis://<orion>/Orion/Orion.Groups/ContainerID=<id>
+Body: {"Description": "<notes>"}
+```
+
+Queue `swis.writeback.site-notes`, one job per edit, recorded in `site_notes_writes`. Before
+writing, the worker reads the description (W1). If it no longer equals the text the person
+started from, the write ends as `conflict` and SolarWinds is left alone. After writing, W1
+again stores what SolarWinds now holds in the mirror. The job is never retried; the outcome
+shows next to the notes. The write-back account needs node management rights to edit groups.

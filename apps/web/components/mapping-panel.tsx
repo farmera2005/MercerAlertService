@@ -69,14 +69,22 @@ function CpSelect({
   );
 }
 
+export interface SiteGroupPreview {
+  /** Groups in the last groups poll (0 = not polled yet). */
+  groupsPolled: number;
+  rows: Array<{ groupName: string; siteName: string; devices: number; linkedSite: string | null }>;
+}
+
 export function MappingPanel({
   fields,
   discovery,
   sites,
+  siteGroups,
 }: {
   fields: FieldState[];
   discovery: { at: string; report: DiscoveryReport } | null;
   sites: SiteKey[];
+  siteGroups: SiteGroupPreview;
 }) {
   const f = Object.fromEntries(fields.map((x) => [x.key, x])) as Record<string, FieldState>;
   const [discState, discAction, discovering] = useActionState<DiscoverState>(
@@ -172,6 +180,56 @@ export function MappingPanel({
       </Card>
 
       <form action={saveAction} className="space-y-6" noValidate>
+        <Card
+          title="Sites from SolarWinds groups"
+          description="If each site is a group in SolarWinds, MAS keeps one site per group: same name, and the group description as the site notes. Devices go to the site whose group contains them; the custom properties below are the fallback."
+        >
+          <div className="grid gap-5 sm:grid-cols-2" data-testid="site-groups">
+            {f.SITE_GROUP_PARENT && (
+              <SettingField
+                field={f.SITE_GROUP_PARENT}
+                error={saveState.errors?.SITE_GROUP_PARENT}
+              />
+            )}
+            {f.SITE_GROUP_PATTERN && (
+              <SettingField
+                field={f.SITE_GROUP_PATTERN}
+                error={saveState.errors?.SITE_GROUP_PATTERN}
+              />
+            )}
+          </div>
+          {siteGroups.rows.length > 0 ? (
+            <table className="mt-6 w-full text-left text-sm" data-testid="site-group-rows">
+              <thead className="text-xs text-slate-400">
+                <tr>
+                  <th className="py-1">SolarWinds group</th>
+                  <th>Devices</th>
+                  <th>Site in MAS</th>
+                </tr>
+              </thead>
+              <tbody>
+                {siteGroups.rows.map((r) => (
+                  <tr key={r.groupName} className="border-t border-white/5">
+                    <td className="py-1.5">{r.groupName}</td>
+                    <td className="tabular-nums">{r.devices}</td>
+                    <td className={r.linkedSite ? '' : 'text-amber-300'}>
+                      {r.linkedSite ?? `“${r.siteName}” is created at the next groups poll`}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          ) : (
+            <p className="mt-4 text-sm text-slate-400">
+              {siteGroups.groupsPolled === 0
+                ? 'No groups read from SolarWinds yet. The groups poll runs every few minutes once monitoring has started.'
+                : (f.SITE_GROUP_PARENT?.value ?? '') || (f.SITE_GROUP_PATTERN?.value ?? '')
+                  ? `None of the ${siteGroups.groupsPolled} SolarWinds groups match. Check the group name or pattern.`
+                  : `Not used: ${siteGroups.groupsPolled} groups found in SolarWinds. Set the parent group or a name pattern to use them as sites.`}
+            </p>
+          )}
+        </Card>
+
         <Card
           title="Site & division mapping"
           description="Pick the node custom properties that say where each device lives."

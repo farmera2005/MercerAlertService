@@ -1,9 +1,12 @@
 import { sql } from 'drizzle-orm';
 import {
+  bigserial,
   boolean,
   doublePrecision,
+  index,
   integer,
   jsonb,
+  pgEnum,
   pgTable,
   serial,
   smallint,
@@ -56,7 +59,10 @@ export const sites = pgTable('sites', {
     .default({ days: [1, 2, 3, 4, 5], start: '07:00', end: '17:00' }),
   harvestHours: jsonb('harvest_hours').$type<BusinessHours | null>(),
   ownerGroup: text('owner_group'),
+  /** MAS-only notes; a site linked to a SolarWinds group uses the group description instead. */
   contactNotes: text('contact_notes'),
+  /** The SolarWinds site group this site corresponds to (SITE_GROUP_PARENT / _PATTERN). */
+  orionContainerId: integer('orion_container_id').unique(),
   aliases: text('aliases')
     .array()
     .notNull()
@@ -82,3 +88,35 @@ export const appSettings = pgTable('app_settings', {
   updatedBy: text('updated_by'),
   updatedAt: ts('updated_at').notNull().defaultNow(),
 });
+
+export const siteNotesWriteStatus = pgEnum('site_notes_write_status', [
+  'pending',
+  'ok',
+  'conflict',
+  'failed',
+  'skipped',
+]);
+
+/**
+ * Site notes edited in MAS for a site linked to a SolarWinds group. The worker writes them to
+ * the group description with the write-back account, unless the description changed in
+ * SolarWinds since the person loaded it (`base`): then the row ends as `conflict`.
+ */
+export const siteNotesWrites = pgTable(
+  'site_notes_writes',
+  {
+    id: bigserial('id', { mode: 'number' }).primaryKey(),
+    siteId: integer('site_id')
+      .notNull()
+      .references(() => sites.id, { onDelete: 'cascade' }),
+    containerId: integer('container_id').notNull(),
+    text: text('text').notNull(),
+    base: text('base'),
+    requestedBy: text('requested_by').notNull(),
+    status: siteNotesWriteStatus('status').notNull().default('pending'),
+    error: text('error'),
+    createdAt: ts('created_at').notNull().defaultNow(),
+    completedAt: ts('completed_at'),
+  },
+  (t) => [index('site_notes_writes_site_idx').on(t.siteId, t.createdAt)],
+);

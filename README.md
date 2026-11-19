@@ -196,10 +196,15 @@ and revoked. Menu names differ slightly between Orion versions.
    **No**. **Do not add account limitations.** MAS needs to see every node, or correlation
    will have gaps.
 
-**Write-back (optional, off by default).** To acknowledge alerts in Orion when an incident
-is acknowledged in MAS, create a **second** account. Give it the same settings, except
-_Allow alert management rights_ = **Yes**. Then enter it on the SolarWinds page under
-_Orion write-back_.
+**Write-back (optional, off by default).** MAS can write three things back to Orion:
+
+- acknowledge alerts when an incident is acknowledged in MAS;
+- add incident notes to the alerts;
+- save site notes to the site's SolarWinds group.
+
+For this, create a **second** account with the same settings, except _Allow alert management
+rights_ = **Yes**, and, for site notes, _Allow node management rights_ = **Yes** (groups are
+edited under node management). Then enter it on the SolarWinds page under _Orion write-back_.
 
 ### The Orion certificate
 
@@ -317,10 +322,33 @@ lookups did not actually return is shown in amber as _unverified_.
 
 ### Orion write-back (optional)
 
-To have **Acknowledge** in MAS also acknowledge the alerts in Orion, create a second Orion
-account that may acknowledge alerts, then in Settings → SolarWinds turn on write-back and
-enter that account. The worker calls `Orion.AlertActive.Acknowledge`; the result appears on the
-incident timeline and in the audit log.
+With a second, write-capable Orion account (see above), turn on write-back in Settings →
+SolarWinds and enter that account. MAS then writes back three things:
+
+- **Acknowledge** in MAS also acknowledges the incident's alerts in Orion.
+- **Incident notes** are appended to those alerts (`AppendNote`), signed with the person's
+  name and the incident number.
+- **Site notes**, for sites that come from SolarWinds groups (below), are saved to the group's
+  description. If someone changed it in SolarWinds in the meantime, MAS doesn't overwrite it;
+  it shows the current text and asks you to make the change again.
+
+Every write appears on the incident timeline or next to the site notes, and in the audit log.
+
+### Sites from SolarWinds groups
+
+If each site is a group in SolarWinds, go to Settings → Mapping → **Sites from SolarWinds
+groups**. Name the group that holds the site groups (for example `Locations`), and/or give a
+pattern for site group names. With `^Site - (.+)$`, the group `Site - Rockford` becomes the site
+`Rockford`. The page lists the groups found and the MAS site each one maps to.
+
+- **One site per group.** Each site group becomes a site: an existing site is matched by name or
+  other name, otherwise one is created. Renaming the group renames the site, and the old name
+  stays as another name.
+- **Devices.** A device belongs to the site whose group contains it, including through nested
+  groups. Custom properties and hostname prefixes are only the fallback.
+- **Notes.** The group's **description** is the site's notes: shown on the site page, and
+  editable in Settings → Sites when write-back is on.
+- **Refresh.** Groups are read every 5 minutes (`SWIS_POLL_GROUPS_SEC`).
 
 ---
 

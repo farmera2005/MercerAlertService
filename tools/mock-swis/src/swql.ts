@@ -159,8 +159,13 @@ export function entityTables(w: World, dropFields: Set<string>): Map<string, Ent
   });
   map.set('metadata.entity', {
     rows: () =>
-      defs.map(([n]) => ({ FullName: n, Namespace: n.split('.').slice(0, -1).join('.') })),
-    props: () => ['FullName', 'Namespace'],
+      defs.map(([n]) => ({
+        FullName: n,
+        Namespace: n.split('.').slice(0, -1).join('.'),
+        // Like Orion: group properties (e.g. Description) can be written with SWIS update.
+        CanUpdate: n === 'Orion.Container',
+      })),
+    props: () => ['FullName', 'Namespace', 'CanUpdate'],
   });
   map.set('metadata.verbargument', {
     rows: () => [
@@ -176,6 +181,20 @@ export function entityTables(w: World, dropFields: Set<string>): Map<string, Ent
         VerbName: 'Acknowledge',
         Position: 1,
         Name: 'notes',
+        Type: 'System.String',
+      },
+      {
+        EntityName: 'Orion.AlertActive',
+        VerbName: 'AppendNote',
+        Position: 0,
+        Name: 'alertObjectIds',
+        Type: 'System.Int32[]',
+      },
+      {
+        EntityName: 'Orion.AlertActive',
+        VerbName: 'AppendNote',
+        Position: 1,
+        Name: 'note',
         Type: 'System.String',
       },
     ],

@@ -119,9 +119,12 @@ export function buildTimeline(input: TimelineInput, limit = 400): TimelineEntry[
       text: e.eventTypeName ? `${e.eventTypeName}: ${e.message}` : e.message,
     });
   }
-  // Triggers and resets are already covered by alert transitions; keep people's actions.
+  // Triggers and resets are already covered by alert transitions; keep people's actions. Acks and
+  // notes that MAS itself wrote to Orion are skipped: the MAS entry and its "… in Orion" summary
+  // already show them, and they would repeat once per alert.
   for (const h of input.alertHistory) {
     if (!h.at || (h.eventType !== 2 && h.eventType !== 3)) continue;
+    if (h.message && WRITTEN_BY_MAS.test(h.message)) continue;
     out.push({
       at: h.at,
       source: 'orion',
@@ -136,6 +139,9 @@ export function buildTimeline(input: TimelineInput, limit = 400): TimelineEntry[
   out.sort((a, b) => a.at.getTime() - b.at.getTime() || order(a) - order(b));
   return out.length > limit ? out.slice(out.length - limit) : out;
 }
+
+/** The signature MAS puts on acks and notes it writes to Orion (see apps/worker/src/writeback.ts). */
+const WRITTEN_BY_MAS = /MercerAlertService[^\n]*\(INC-\d+\)\s*$/;
 
 // At the same instant, show the cause (Orion) before MAS's reaction.
 const order = (e: TimelineEntry) => ({ status: 0, alert: 1, orion: 2, mas: 3 })[e.source];

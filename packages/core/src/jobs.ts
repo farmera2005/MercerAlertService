@@ -10,6 +10,23 @@ export const writebackAckSchema = z.object({
 });
 export type WritebackAckJob = z.infer<typeof writebackAckSchema>;
 
+/** A note added to a MAS incident, appended to its active alerts in Orion (AppendNote). */
+export const WRITEBACK_NOTE_QUEUE = 'swis.writeback.note';
+export const writebackNoteSchema = z.object({
+  incidentId: z.number().int().positive(),
+  by: z.string().min(1).max(200),
+  text: z.string().min(1).max(4000),
+});
+export type WritebackNoteJob = z.infer<typeof writebackNoteSchema>;
+
+/** Site notes edited in MAS, written to the site's SolarWinds group description. */
+export const WRITEBACK_SITE_NOTES_QUEUE = 'swis.writeback.site-notes';
+export const writebackSiteNotesSchema = z.object({
+  /** Row in site_notes_writes holding the text, the value it replaces, and the outcome. */
+  writeId: z.number().int().positive(),
+});
+export type WritebackSiteNotesJob = z.infer<typeof writebackSiteNotesSchema>;
+
 export const NOTIFY_TEST_QUEUE = 'notify.test';
 
 /** Settings → Notifications "Send test": a Teams channel, or one person by SMS or Pushover. */

@@ -679,6 +679,45 @@ export function acknowledge(
   return n;
 }
 
+/** Orion.AlertActive.AppendNote: a note on each active alert, kept in the alert history. */
+export function appendNote(
+  w: World,
+  alertObjectIds: number[],
+  note: string,
+  at: Date,
+  by = 'mas-writeback',
+): number {
+  let n = 0;
+  for (const a of w.alertActive) {
+    if (!alertObjectIds.includes(Number(a.AlertObjectID))) continue;
+    a.NumberOfNotes = Number(a.NumberOfNotes ?? 0) + 1;
+    w.alertHistory.push({
+      AlertHistoryID: ++w.seq.history,
+      EventType: 3,
+      TimeStamp: swisTime(at),
+      Message: note,
+      AccountID: by,
+      AlertActiveID: a.AlertActiveID,
+      AlertObjectID: a.AlertObjectID,
+    });
+    n++;
+  }
+  return n;
+}
+
+/** SWIS update on a group URI: only Name and Description, like the properties MAS writes. */
+export function updateGroup(
+  w: World,
+  containerId: number,
+  props: Record<string, unknown>,
+): boolean {
+  const g = w.groups.find((x) => Number(x.ContainerID) === containerId);
+  if (!g) return false;
+  for (const k of ['Name', 'Description'] as const)
+    if (k in props) g[k] = props[k] === null ? null : String(props[k]);
+  return true;
+}
+
 /** Set a node's status, raising/clearing "Node is down" and emitting events like Orion. */
 export function setNodeStatus(
   w: World,

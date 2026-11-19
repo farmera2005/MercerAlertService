@@ -68,7 +68,7 @@ describe.skipIf(!url)('worker ingestion (integration)', () => {
   });
 
   it('runs the initial sync and maps nodes to sites, divisions and roles', async () => {
-    for (const p of ['topology', 'nodes', 'interfaces', 'alerts', 'events'] as const) {
+    for (const p of ['topology', 'groups', 'nodes', 'interfaces', 'alerts', 'events'] as const) {
       const r = await worker.pollOnce(p);
       expect(r, `poller ${p}`).not.toBeNull();
     }
@@ -163,6 +163,7 @@ describe.skipIf(!url)('worker ingestion (integration)', () => {
     expect(states.map((s) => s.poller).sort()).toEqual([
       'alerts',
       'events',
+      'groups',
       'interfaces',
       'nodes',
       'topology',

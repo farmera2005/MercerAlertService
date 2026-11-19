@@ -184,6 +184,8 @@ export interface SiteResolutionContext {
   sitesById: Map<number, SiteRef>;
   divisionsByKey: Map<string, DivisionRef>;
   overrides: Map<number, NodeOverride>;
+  /** nodeId → siteId from SolarWinds site groups (see site-groups.ts); empty when not used. */
+  groupSiteByNode: Map<number, number>;
   config: SiteResolutionConfig;
   captionRe: RegExp | null;
 }
@@ -193,6 +195,7 @@ export function buildSiteResolutionContext(
   divisions: readonly DivisionRef[],
   overrides: Map<number, NodeOverride>,
   config: SiteResolutionConfig,
+  groupSiteByNode: Map<number, number> = new Map(),
 ): SiteResolutionContext {
   const sitesByKey = new Map<string, SiteRef>();
   const sitesById = new Map<number, SiteRef>();
@@ -215,12 +218,13 @@ export function buildSiteResolutionContext(
     sitesById,
     divisionsByKey,
     overrides,
+    groupSiteByNode,
     config,
     captionRe: config.siteFromCaptionRegex ? new RegExp(config.siteFromCaptionRegex) : null,
   };
 }
 
-export type SiteSource = 'override' | 'custom_property' | 'caption' | 'none';
+export type SiteSource = 'override' | 'group' | 'custom_property' | 'caption' | 'none';
 
 export interface SiteResolution {
   siteId: number | null;
@@ -239,8 +243,9 @@ function cpString(cps: Record<string, unknown>, field: string): string | null {
 }
 
 /**
- * Resolve a node to a site and division. Order: admin override → Site custom property →
- * hostname-prefix regex → unmapped. Division: override → Division custom property → site's division.
+ * Resolve a node to a site and division. Order: admin override → SolarWinds site group → Site
+ * custom property → hostname-prefix regex → unmapped. Division: override → Division custom
+ * property → site's division.
  */
 export function resolveNodeSite(
   node: { nodeId: number; caption: string | null; customProperties: Record<string, unknown> },
@@ -254,6 +259,14 @@ export function resolveNodeSite(
   if (ov?.siteId != null && ctx.sitesById.has(ov.siteId)) {
     siteId = ov.siteId;
     source = 'override';
+  }
+
+  if (siteId === null) {
+    const fromGroup = ctx.groupSiteByNode.get(node.nodeId);
+    if (fromGroup !== undefined && ctx.sitesById.has(fromGroup)) {
+      siteId = fromGroup;
+      source = 'group';
+    }
   }
 
   if (siteId === null) {

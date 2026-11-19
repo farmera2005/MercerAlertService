@@ -5,7 +5,7 @@ import { z } from 'zod';
 import { INCIDENT_ACTIONS, NOTE_MAX_CHARS, SNOOZE_OPTIONS_MIN } from '@mercer/core';
 import { applyIncidentAction } from '@mercer/db';
 import { userActor } from '@/lib/auth';
-import { requestOrionAck } from '@/lib/writeback';
+import { requestOrionAck, requestOrionNote } from '@/lib/writeback';
 import { server } from '@/lib/server';
 
 export interface IncidentActionState {
@@ -53,6 +53,10 @@ export async function incidentAction(
   let message = DONE[parsed.data.action]!;
   if (parsed.data.action === 'ack' && res.activeOrionAlerts > 0) {
     const wb = await requestOrionAck(incidentId, actor.display);
+    if (wb) message += ` ${wb}`;
+  }
+  if (parsed.data.action === 'note' && parsed.data.text && res.activeOrionAlerts > 0) {
+    const wb = await requestOrionNote(incidentId, actor.display, parsed.data.text);
     if (wb) message += ` ${wb}`;
   }
   revalidatePath(`/incidents/${incidentId}`);

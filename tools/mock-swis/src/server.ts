@@ -11,7 +11,7 @@ import { createFakeAnthropic, type FakeAnthropic } from './anthropic';
 import { createSinks, type Sinks } from './sinks';
 import { buildScenario, type OutageMode, type Scenario, type ScenarioEnv } from './scenarios';
 import { entityTables, executeSwql, SwqlError } from './swql';
-import { acknowledge, buildWorld, type Rec, type World } from './world';
+import { acknowledge, appendNote, buildWorld, updateGroup, type Rec, type World } from './world';
 
 export interface MockSwisOptions {
   port?: number;
@@ -40,7 +40,7 @@ export interface MockSwis {
   /** Apply all steps of a scenario immediately (or up to `untilSec`). */
   applyScenario(name: string, params?: Record<string, unknown>, untilSec?: number): Scenario;
   reset(): void;
-  stats: { queries: number; invokes: number };
+  stats: { queries: number; invokes: number; updates: number };
   /** Notification sinks (Teams webhooks, Twilio, Pushover lookalikes). */
   sinks: Sinks;
   /** A fake Anthropic Messages API at /__mock/anthropic/v1/messages. */
@@ -89,7 +89,7 @@ export async function startMockSwis(opts: MockSwisOptions = {}): Promise<MockSwi
   let tables = entityTables(world, drop);
   let outage: OutageMode = 'none';
   const timers = new Set<NodeJS.Timeout>();
-  const stats = { queries: 0, invokes: 0 };
+  const stats = { queries: 0, invokes: 0, updates: 0 };
   const sinks = createSinks();
   const anthropic = createFakeAnthropic();
 
@@ -207,7 +207,25 @@ export async function startMockSwis(opts: MockSwisOptions = {}): Promise<MockSwi
         acknowledge(world, ids, note, now());
         return send(res, 200, true);
       }
+      if (inv[1] === 'Orion.AlertActive' && inv[2] === 'AppendNote') {
+        const [ids, note] = JSON.parse(raw) as [number[], string];
+        appendNote(world, ids, note, now());
+        return send(res, 200, true);
+      }
       return send(res, 400, { Message: `Verb ${inv[1]}.${inv[2]} not supported by mock` });
+    }
+    // SWIS CRUD update: POST …/Json/swis://host/Orion/Orion.Groups/ContainerID=5 {props}
+    const upd = /^\/SolarWinds\/InformationService\/v3\/Json\/(swis:\/\/.+)$/.exec(url.pathname);
+    if (upd && req.method === 'POST') {
+      stats.updates++;
+      const group = /\/Orion\.(?:Groups|Container)\/ContainerID=(\d+)$/.exec(upd[1]!);
+      if (!group) return send(res, 400, { Message: `Update of ${upd[1]} not supported by mock` });
+      const ok = updateGroup(
+        world,
+        Number(group[1]),
+        JSON.parse(raw || '{}') as Record<string, unknown>,
+      );
+      return ok ? send(res, 200, null) : send(res, 404, { Message: 'Group not found' });
     }
     return send(res, 404, { Message: 'Not found' });
   };

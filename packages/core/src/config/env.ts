@@ -48,6 +48,8 @@ export const envSchema = z.object({
   SWIS_POLL_NODES_SEC: int(60, 10),
   SWIS_POLL_INTERFACES_SEC: int(180, 30),
   SWIS_POLL_EVENTS_SEC: int(300, 30),
+  /** Groups and their members: site groups, site notes (group descriptions). */
+  SWIS_POLL_GROUPS_SEC: int(300, 60),
   SWIS_POLL_TOPOLOGY_SEC: int(3600, 60),
   SWIS_WRITEBACK_ENABLED: bool(false),
   SWIS_WRITE_USERNAME: z.string().optional(),
@@ -60,6 +62,10 @@ export const envSchema = z.object({
   CP_ROLE_FIELD: str(''),
   SITE_FROM_CAPTION_REGEX: str('^([A-Za-z]{3,5})[-_]'),
   SITE_AUTO_CREATE: bool(true),
+  /** Sites from SolarWinds groups: the group whose sub-groups are the sites (exact name). */
+  SITE_GROUP_PARENT: str(''),
+  /** …and/or a pattern on group names; its first capture group, if any, is the site name. */
+  SITE_GROUP_PATTERN: str(''),
 
   // --- Retention ---
   RETENTION_RAW_DAYS: int(90, 1),
@@ -212,7 +218,14 @@ export interface SwisConfig {
   eventsBackfill: number;
   naiveTimezone: string;
   staleAfterSec: number;
-  pollSec: { alerts: number; nodes: number; interfaces: number; events: number; topology: number };
+  pollSec: {
+    alerts: number;
+    nodes: number;
+    interfaces: number;
+    events: number;
+    groups: number;
+    topology: number;
+  };
   writeback: { enabled: boolean; username?: string; password?: string };
 }
 
@@ -223,6 +236,9 @@ export interface MappingConfig {
   roleField: string;
   siteFromCaptionRegex: string | null;
   autoCreateSites: boolean;
+  /** Which SolarWinds groups are sites; both null = groups are not used for sites. */
+  siteGroupParent: string | null;
+  siteGroupPattern: string | null;
 }
 
 export interface AppConfig {
@@ -380,12 +396,13 @@ export function loadConfig(
   }
   assertTimezone(e.APP_TIMEZONE, 'APP_TIMEZONE');
   assertTimezone(e.SWIS_NAIVE_TIMEZONE, 'SWIS_NAIVE_TIMEZONE');
-  if (e.SITE_FROM_CAPTION_REGEX) {
+  for (const key of ['SITE_FROM_CAPTION_REGEX', 'SITE_GROUP_PATTERN'] as const) {
+    if (!e[key]) continue;
     try {
-      new RegExp(e.SITE_FROM_CAPTION_REGEX);
+      new RegExp(e[key]);
     } catch {
-      const err = new ConfigError(`SITE_FROM_CAPTION_REGEX is not a valid regular expression`);
-      err.issues = [{ key: 'SITE_FROM_CAPTION_REGEX', message: 'not a valid regular expression' }];
+      const err = new ConfigError(`${key} is not a valid regular expression`);
+      err.issues = [{ key, message: 'not a valid regular expression' }];
       throw err;
     }
   }
@@ -517,6 +534,7 @@ export function loadConfig(
         nodes: e.SWIS_POLL_NODES_SEC,
         interfaces: e.SWIS_POLL_INTERFACES_SEC,
         events: e.SWIS_POLL_EVENTS_SEC,
+        groups: e.SWIS_POLL_GROUPS_SEC,
         topology: e.SWIS_POLL_TOPOLOGY_SEC,
       },
       writeback: {
@@ -532,6 +550,8 @@ export function loadConfig(
       roleField: e.CP_ROLE_FIELD,
       siteFromCaptionRegex: e.SITE_FROM_CAPTION_REGEX || null,
       autoCreateSites: e.SITE_AUTO_CREATE,
+      siteGroupParent: e.SITE_GROUP_PARENT.trim() || null,
+      siteGroupPattern: e.SITE_GROUP_PATTERN || null,
     },
     retention: {
       rawDays: e.RETENTION_RAW_DAYS,

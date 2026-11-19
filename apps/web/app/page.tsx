@@ -17,7 +17,7 @@ import { getSettingsState } from '@/lib/settings';
 
 export const dynamic = 'force-dynamic';
 
-const POLLERS = ['alerts', 'nodes', 'interfaces', 'events', 'topology'] as const;
+const POLLERS = ['alerts', 'nodes', 'interfaces', 'events', 'groups', 'topology'] as const;
 
 export default async function Overview({
   searchParams,

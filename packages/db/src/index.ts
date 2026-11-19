@@ -32,3 +32,4 @@ export * from './repo/trends';
 export * from './repo/chat';
 export * from './repo/chat-tools';
 export * from './repo/devices';
+export * from './repo/site-groups';

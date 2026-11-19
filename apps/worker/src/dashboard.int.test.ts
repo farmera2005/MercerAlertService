@@ -26,7 +26,7 @@ import {
 import { runMigrations } from '@mercer/db/migrate';
 import { startMockSwis, type MockSwis } from '@mercer/mock-swis';
 import { createWorker, type Worker } from './worker';
-import { runWritebackAck } from './writeback';
+import { runWritebackAck, runWritebackNote } from './writeback';
 
 const url = process.env.DATABASE_URL_TEST;
 initLogger({ service: 'test', level: 'silent' });
@@ -82,7 +82,7 @@ describe.skipIf(!url)('dashboard data and incident actions (integration)', () =>
 
     worker = createWorker(loadConfig(env), { scheduling: false, log: silent, env });
     await worker.start();
-    for (const p of ['topology', 'nodes', 'interfaces', 'alerts', 'events'] as const)
+    for (const p of ['topology', 'groups', 'nodes', 'interfaces', 'alerts', 'events'] as const)
       await worker.pollOnce(p);
     await worker.correlateOnce({ reconcile: true });
     mock.applyScenario('site-wan-down', { site: 'ROCK', childAlerts: 30 });
@@ -185,6 +185,34 @@ describe.skipIf(!url)('dashboard data and incident actions (integration)', () =>
       ok: false,
       error: 'Already acknowledged.',
     });
+  });
+
+  it('adds incident notes to the alerts in Orion when write-back is on', async () => {
+    const cfg = loadConfig({
+      ...env,
+      SWIS_WRITEBACK_ENABLED: 'true',
+      SWIS_WRITE_USERNAME: 'mas',
+      SWIS_WRITE_PASSWORD: 'mas',
+    });
+    const job = { incidentId: p1Id, by: 'Pat Doe', text: 'Spectrum ticket 4471' };
+    expect((await runWritebackNote(job, loadConfig(env), h.db, silent)).alerts).toBe(0);
+    const before = mock.world.alertHistory.length;
+    const r = await runWritebackNote(job, cfg, h.db, silent);
+    expect(r.alerts).toBeGreaterThan(20);
+    const notes = mock.world.alertHistory.slice(before).filter((x) => x.EventType === 3);
+    expect(notes).toHaveLength(r.alerts);
+    expect(notes[0]!.Message).toBe(
+      `Spectrum ticket 4471\n— Pat Doe in MercerAlertService (INC-${p1Id})`,
+    );
+    const [ev] = await q<{ message: string }>(
+      `select message from incident_events where incident_id=$1 and type='orion_note'`,
+      [p1Id],
+    );
+    expect(ev!.message).toBe(`Note added to ${r.alerts} alerts in Orion`);
+    const [audit] = await q<{ after: { onBehalfOf: string } }>(
+      `select after from audit_log where action='orion.writeback.note'`,
+    );
+    expect(audit!.after.onBehalfOf).toBe('Pat Doe');
   });
 
   it('acknowledges the alerts in Orion when write-back is on', async () => {

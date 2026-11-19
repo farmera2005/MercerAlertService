@@ -5,6 +5,7 @@ export const POLL_QUEUES: Record<PollerName, string> = {
   nodes: 'swis.poll.nodes',
   interfaces: 'swis.poll.interfaces',
   events: 'swis.poll.events',
+  groups: 'swis.poll.groups',
   topology: 'swis.poll.topology',
 };
 
@@ -16,5 +17,6 @@ export const POLL_EXPIRE_SEC: Record<PollerName, number> = {
   nodes: 300,
   interfaces: 600,
   events: 600,
+  groups: 300,
   topology: 1800,
 };

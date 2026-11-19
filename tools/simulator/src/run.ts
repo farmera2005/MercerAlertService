@@ -184,7 +184,7 @@ export async function runScenario(sim: SimScenario, databaseUrl: string): Promis
   try {
     await worker.start();
     // Baseline: everything already active is "seeded".
-    for (const p of ['topology', 'nodes', 'interfaces', 'alerts', 'events'] as const)
+    for (const p of ['topology', 'groups', 'nodes', 'interfaces', 'alerts', 'events'] as const)
       await worker.pollOnce(p);
     await worker.correlateOnce({ reconcile: true });
     await worker.notifyOnce();

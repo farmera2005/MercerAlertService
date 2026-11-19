@@ -2,7 +2,7 @@ import { eq, sql } from 'drizzle-orm';
 import { pollerState, pollRuns } from '../schema';
 import type { DbOrTx } from '../client';
 
-export type PollerName = 'alerts' | 'nodes' | 'interfaces' | 'events' | 'topology';
+export type PollerName = 'alerts' | 'nodes' | 'interfaces' | 'events' | 'groups' | 'topology';
 export type PollerStateRow = typeof pollerState.$inferSelect;
 
 export async function getPollerState(

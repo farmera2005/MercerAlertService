@@ -3,8 +3,6 @@ import { chunk, parseSwisUri } from '@mercer/core';
 import {
   orionAlertConfigs,
   orionDependencies,
-  orionGroupMembers,
-  orionGroups,
   orionStatusInfo,
   topologyConnections,
 } from '../schema';
@@ -29,24 +27,9 @@ export interface TopologyBundle {
     parentEntityType: string | null;
     childEntityType: string | null;
   }>;
-  groups?: Array<{
-    containerId: number;
-    name: string;
-    status: number | null;
-    description: string | null;
-    uri: string | null;
-  }>;
-  members?: Array<{
-    containerId: number;
-    memberUri: string;
-    memberPrimaryId: number | null;
-    memberEntityType: string | null;
-    name: string | null;
-    status: number | null;
-  }>;
 }
 
-/** Full replace of the provided topology/dependency/group tables in one transaction. */
+/** Full replace of the provided topology/dependency tables in one transaction. Groups: site-groups.ts. */
 export async function replaceTopology(
   db: Db,
   b: TopologyBundle,
@@ -62,26 +45,6 @@ export async function replaceTopology(
       await tx.execute(sql`TRUNCATE ${orionDependencies}`);
       await insertDependencies(tx, b.dependencies, now);
       out.dependencies = b.dependencies.length;
-    }
-    if (b.groups && b.members) {
-      await tx.execute(sql`TRUNCATE ${orionGroupMembers}, ${orionGroups}`);
-      for (const part of chunk(b.groups, 1000)) {
-        await tx.insert(orionGroups).values(part.map((g) => ({ ...g, syncedAt: now })));
-      }
-      for (const part of chunk(b.members, 1000)) {
-        await tx
-          .insert(orionGroupMembers)
-          .values(
-            part.map((m) => ({
-              ...m,
-              nodeId: parseSwisUri(m.memberUri).nodeId ?? null,
-              syncedAt: now,
-            })),
-          )
-          .onConflictDoNothing();
-      }
-      out.groups = b.groups.length;
-      out.members = b.members.length;
     }
     return out;
   });

@@ -8,7 +8,7 @@ import {
   settingsForSection,
   type SettingSection,
 } from '@mercer/core';
-import { addSiteAlias, createSite, deleteSite, updateSite } from '@mercer/db';
+import { addSiteAlias, createSite, deleteSite, siteGroupInfo, updateSite } from '@mercer/db';
 import {
   SETUP_QUEUES,
   type CertJobOutput,
@@ -20,6 +20,7 @@ import { adminActor } from '@/lib/auth';
 import { runWorkerJob } from '@/lib/jobs';
 import { server } from '@/lib/server';
 import { changesFromForm, saveChanges } from '@/lib/settings';
+import { requestSiteNotesSave } from '@/lib/writeback';
 
 export interface FormState {
   ok?: boolean;
@@ -173,8 +174,27 @@ export async function saveSiteAction(_: FormState, form: FormData): Promise<Form
     return { ok: false, message: 'Please fix the highlighted fields.', errors, values: echo(form) };
   const id = Number(form.get('id') ?? 0);
   const { db } = server();
+  const linked = id ? (await siteGroupInfo(db.db, [id])).get(id) : undefined;
+  let notesMessage: { ok: boolean; message: string } | null = null;
   try {
-    if (id) await updateSite(db.db, id, s, actor);
+    if (id && linked) {
+      // Linked to a SolarWinds group: the name follows the group, and the notes are the group
+      // description (written by the worker), so neither is saved here.
+      const { name: _name, contactNotes: _notes, ...rest } = s;
+      await updateSite(db.db, id, rest, actor);
+      const text = String(form.get('groupNotes') ?? '').replace(/\r\n/g, '\n');
+      const base = form.has('groupNotesBase') ? String(form.get('groupNotesBase')) : null;
+      if (form.has('groupNotes') && text.trim() !== (base ?? '').replace(/\r\n/g, '\n').trim()) {
+        if (text.length > 4000)
+          return {
+            ok: false,
+            message: 'Notes can be at most 4,000 characters.',
+            errors: { groupNotes: 'Too long.' },
+            values: echo(form),
+          };
+        notesMessage = await requestSiteNotesSave(id, text.trim(), base, actor);
+      }
+    } else if (id) await updateSite(db.db, id, s, actor);
     else await createSite(db.db, s, actor);
   } catch (err) {
     if (String(err).includes('sites_code_unique'))
@@ -187,6 +207,11 @@ export async function saveSiteAction(_: FormState, form: FormData): Promise<Form
     throw err;
   }
   revalidatePath('/', 'layout');
+  if (notesMessage)
+    return {
+      ok: notesMessage.ok,
+      message: `Site saved. ${notesMessage.message}`,
+    };
   return { ok: true, message: id ? 'Site saved.' : 'Site added.' };
 }
 

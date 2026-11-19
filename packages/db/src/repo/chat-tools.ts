@@ -38,6 +38,7 @@ import {
   searchIncidents,
 } from './dashboard';
 import { flappingNodes, topInterfaces } from './trends';
+import { siteGroupInfo } from './site-groups';
 
 export interface ChatToolContext {
   now: Date;
@@ -279,6 +280,7 @@ async function siteDetail(db: DbOrTx, text: string, ctx: ChatToolContext): Promi
   const [div] = d.site.divisionCode
     ? await db.select().from(divisions).where(eq(divisions.code, d.site.divisionCode))
     : [];
+  const group = (await siteGroupInfo(db, [d.site.id])).get(d.site.id);
   return {
     ref: refOf('site', d.site.code.toUpperCase()),
     code: d.site.code,
@@ -289,7 +291,8 @@ async function siteDetail(db: DbOrTx, text: string, ctx: ChatToolContext): Promi
     harvest_critical: d.site.harvestCritical,
     business_hours: d.site.businessHours,
     owner_group: d.site.ownerGroup,
-    contact_notes: d.site.contactNotes?.slice(0, 300) ?? null,
+    // Linked to a SolarWinds group: the group description is the site's notes.
+    notes: (group ? group.description : d.site.contactNotes)?.slice(0, 300) ?? null,
     active_orion_alerts: d.activeAlertCount,
     devices: d.nodes.slice(0, 60).map((n) => ({
       ref: refOf('node', n.nodeId),

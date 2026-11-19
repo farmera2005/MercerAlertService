@@ -13,8 +13,11 @@ describe('loadConfig', () => {
       nodes: 60,
       interfaces: 180,
       events: 300,
+      groups: 300,
       topology: 3600,
     });
+    expect(cfg.mapping.siteGroupParent).toBeNull();
+    expect(cfg.mapping.siteGroupPattern).toBeNull();
     expect(cfg.swis.insecureSkipVerify).toBe(false);
     expect(cfg.retention.rawDays).toBe(90);
     expect(cfg.timezone).toBe('America/New_York');

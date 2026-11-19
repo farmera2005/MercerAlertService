@@ -10,6 +10,7 @@ export const dynamic = 'force-dynamic';
 
 const SOURCE: Record<string, { label: string; tone: 'ok' | 'info' | 'warn' | 'bad' }> = {
   override: { label: 'override', tone: 'info' },
+  group: { label: 'SolarWinds group', tone: 'ok' },
   custom_property: { label: 'Orion property', tone: 'ok' },
   caption: { label: 'from hostname', tone: 'warn' },
   none: { label: 'no site', tone: 'bad' },

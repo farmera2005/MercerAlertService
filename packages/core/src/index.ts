@@ -6,6 +6,7 @@ export * from './logger';
 export * from './orion';
 export * from './uri';
 export * from './mapping';
+export * from './site-groups';
 export * from './time';
 export * from './util';
 export * from './ingest/diff';
