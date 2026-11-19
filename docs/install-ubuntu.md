@@ -9,7 +9,9 @@ MAS configuration file is needed.
 nginx 1.24:
 
 - cloning the public repository over HTTPS without credentials;
-- downloading the images from a registry and starting the stack (no build on the VM);
+- downloading the images from a registry and starting the stack (no build on the VM). The
+  published images on `ghcr.io` are readable anonymously. The full download was tested from a
+  local mirror, because the test environment blocks GitHub's download host;
 - the nginx site (HTTPS, live updates, sign-in, uploads, client addresses);
 - backup, restore, and rebuilding on a new VM from the master key;
 - recovery after a Docker restart;
@@ -344,14 +346,15 @@ MAS comes as ready-made images. CI builds and tests them, then publishes them at
 it, so the install needs no npm access, build CA or build time.
 
 ```bash
-docker compose pull
+docker compose pull && docker compose up -d
 ```
 
-```bash
-docker compose up -d
-```
+The download is about 300 MB. The `&&` matters: if the download fails, Compose stops instead of
+falling back to building the images on the VM. In that case it prints `failed to copy …`,
+`Forbidden` or a timeout, and suggests `docker compose build`. **Don't build.** Fix the access
+instead: see the `docker compose pull` row in §14.
 
-The download is about 300 MB. Then check the state:
+Then check the state:
 
 ```bash
 docker compose ps -a
@@ -783,6 +786,8 @@ live one fails on the job queue's partitioned tables.
    docker compose pull
    ```
 
+   It must finish without errors before you continue (see §5 if it doesn't).
+
 3. Put the saved master key in place **before** the first start. The `init` container keeps an
    existing key and only generates what is missing:
 
@@ -918,25 +923,25 @@ If an exemption isn't possible, everything on the VM must trust the inspecting C
 
 ## 14. Troubleshooting
 
-| Symptom                                                                                                                                                   | Cause and fix                                                                                                                                                                                      |
-| --------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `git clone` fails with `Permission denied (publickey)`                                                                                                    | You used the SSH address `git@github.com:…`: use the HTTPS address in §3, which needs no key. If the repository is private, §3's deploy-key steps include the checks.                              |
-| `docker compose` isn't found, or rejects the `required` key under `env_file`                                                                              | Compose is missing or older than 2.24. Install it from Docker's repository (§2).                                                                                                                   |
-| `permission denied while trying to connect to the docker API at unix:///var/run/docker.sock` (older Docker: `…the Docker daemon socket`)                  | Your session isn't in the `docker` group. Run `id -nG`: if `docker` is missing, run `sudo usermod -aG docker $USER`, then sign out and SSH back in (§2).                                           |
-| `failed to bind host port … address already in use`                                                                                                       | Something else uses that port. For 5432 (a local Postgres), set `DB_PORT=55432` in `.env`. For 3000, set `WEB_PORT=127.0.0.1:3001` and change `proxy_pass` to match.                               |
-| `docker compose pull` fails with `denied`, `unauthorized` or `manifest unknown`                                                                           | The image or tag doesn't exist, or the VM can't reach `ghcr.io`. Check `MAS_VERSION` and `MAS_REGISTRY` in `.env`, and that `ghcr.io` and `pkg-containers.githubusercontent.com` are allowed (§0). |
-| The §5 check prints `FAILED: …`, or Teams, SMS or AI calls fail                                                                                           | See [Containers can't reach the internet](#containers-cant-reach-the-internet) below.                                                                                                              |
-| Building the images yourself fails at `corepack prepare pnpm…` or `pnpm install` with `Error when performing the request to https://registry.npmjs.org/…` | The same causes as below, for the npm registry. Run the build check under [Containers can't reach the internet](#containers-cant-reach-the-internet).                                              |
-| No setup code in the log                                                                                                                                  | Setup is already complete (sign in instead), or `web` hasn't started: `docker compose ps -a`, `docker compose logs web`.                                                                           |
-| nginx: `socket() [::]:80 failed (97: …)`                                                                                                                  | IPv6 is disabled: remove the `listen [::]` lines (§6).                                                                                                                                             |
-| `502 Bad Gateway` from nginx                                                                                                                              | `web` isn't running or listens elsewhere: `docker compose ps -a`, then check that `proxy_pass` matches `WEB_PORT`.                                                                                 |
-| `413 Request Entity Too Large` when uploading a map image                                                                                                 | `client_max_body_size` is missing from the nginx site (§6).                                                                                                                                        |
-| The audit log shows `172.x.x.x` for everyone                                                                                                              | Turn on **Behind a reverse proxy** in Settings → General (§8).                                                                                                                                     |
-| The dot next to your name says **Reconnecting** all the time                                                                                              | Something between the browser and MAS buffers or cuts long requests. Use the nginx site as given; check any other proxy or load balancer in the path.                                              |
-| **Test connection** to Orion times out                                                                                                                    | Firewall between the VM and Orion on 17774 (check with the `curl` in §1).                                                                                                                          |
-| Orion fails with a certificate error                                                                                                                      | Fetch and trust the certificate again in Settings → SolarWinds, and check **Certificate name** ([The Orion certificate](../README.md#the-orion-certificate)).                                      |
-| The VM's disk is filling up                                                                                                                               | `docker system df`, then `docker builder prune -f`. Check `BACKUP_KEEP_DAYS` and the retention settings in Settings → General.                                                                     |
-| Teams, SMS or AI calls fail behind a web proxy                                                                                                            | `NODE_USE_ENV_PROXY=1` and the proxy variables in `.env` (§13), plus the CA override if the proxy inspects TLS.                                                                                    |
+| Symptom                                                                                                                                                   | Cause and fix                                                                                                                                                                                                                                                                      |
+| --------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `git clone` fails with `Permission denied (publickey)`                                                                                                    | You used the SSH address `git@github.com:…`: use the HTTPS address in §3, which needs no key. If the repository is private, §3's deploy-key steps include the checks.                                                                                                              |
+| `docker compose` isn't found, or rejects the `required` key under `env_file`                                                                              | Compose is missing or older than 2.24. Install it from Docker's repository (§2).                                                                                                                                                                                                   |
+| `permission denied while trying to connect to the docker API at unix:///var/run/docker.sock` (older Docker: `…the Docker daemon socket`)                  | Your session isn't in the `docker` group. Run `id -nG`: if `docker` is missing, run `sudo usermod -aG docker $USER`, then sign out and SSH back in (§2).                                                                                                                           |
+| `failed to bind host port … address already in use`                                                                                                       | Something else uses that port. For 5432 (a local Postgres), set `DB_PORT=55432` in `.env`. For 3000, set `WEB_PORT=127.0.0.1:3001` and change `proxy_pass` to match.                                                                                                               |
+| `docker compose pull` fails with `failed to copy`, `Forbidden`, a timeout, `denied` or `manifest unknown`, and suggests `docker compose build`            | The VM can't reach GitHub's registry, or the tag doesn't exist. Allow **both** `ghcr.io` and `pkg-containers.githubusercontent.com` (layers download from the second), or use the web proxy (§13). Check `MAS_VERSION` / `MAS_REGISTRY` in `.env`. Ignore the suggestion to build. |
+| The §5 check prints `FAILED: …`, or Teams, SMS or AI calls fail                                                                                           | See [Containers can't reach the internet](#containers-cant-reach-the-internet) below.                                                                                                                                                                                              |
+| Building the images yourself fails at `corepack prepare pnpm…` or `pnpm install` with `Error when performing the request to https://registry.npmjs.org/…` | The same causes as below, for the npm registry. Run the build check under [Containers can't reach the internet](#containers-cant-reach-the-internet).                                                                                                                              |
+| No setup code in the log                                                                                                                                  | Setup is already complete (sign in instead), or `web` hasn't started: `docker compose ps -a`, `docker compose logs web`.                                                                                                                                                           |
+| nginx: `socket() [::]:80 failed (97: …)`                                                                                                                  | IPv6 is disabled: remove the `listen [::]` lines (§6).                                                                                                                                                                                                                             |
+| `502 Bad Gateway` from nginx                                                                                                                              | `web` isn't running or listens elsewhere: `docker compose ps -a`, then check that `proxy_pass` matches `WEB_PORT`.                                                                                                                                                                 |
+| `413 Request Entity Too Large` when uploading a map image                                                                                                 | `client_max_body_size` is missing from the nginx site (§6).                                                                                                                                                                                                                        |
+| The audit log shows `172.x.x.x` for everyone                                                                                                              | Turn on **Behind a reverse proxy** in Settings → General (§8).                                                                                                                                                                                                                     |
+| The dot next to your name says **Reconnecting** all the time                                                                                              | Something between the browser and MAS buffers or cuts long requests. Use the nginx site as given; check any other proxy or load balancer in the path.                                                                                                                              |
+| **Test connection** to Orion times out                                                                                                                    | Firewall between the VM and Orion on 17774 (check with the `curl` in §1).                                                                                                                                                                                                          |
+| Orion fails with a certificate error                                                                                                                      | Fetch and trust the certificate again in Settings → SolarWinds, and check **Certificate name** ([The Orion certificate](../README.md#the-orion-certificate)).                                                                                                                      |
+| The VM's disk is filling up                                                                                                                               | `docker system df`, then `docker builder prune -f`. Check `BACKUP_KEEP_DAYS` and the retention settings in Settings → General.                                                                                                                                                     |
+| Teams, SMS or AI calls fail behind a web proxy                                                                                                            | `NODE_USE_ENV_PROXY=1` and the proxy variables in `.env` (§13), plus the CA override if the proxy inspects TLS.                                                                                                                                                                    |
 
 ### Containers can't reach the internet
 
