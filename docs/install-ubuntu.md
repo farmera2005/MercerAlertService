@@ -8,6 +8,7 @@ MAS configuration file is needed.
 **What was tested.** These were run on Ubuntu 24.04 LTS with Docker Engine 29, Compose v5 and
 nginx 1.24:
 
+- cloning the public repository over HTTPS without credentials;
 - building and starting the stack;
 - the nginx site (HTTPS, live updates, sign-in, uploads, client addresses);
 - backup, restore, and rebuilding on a new VM from the master key;
@@ -15,7 +16,7 @@ nginx 1.24:
 - the proxy and CA settings for MAS itself (§13).
 
 These were not run, and are standard Ubuntu and Docker procedures: installing Docker on a bare
-VM, the GitHub deploy key, `ufw`, the NAS mount, and the apt and Docker daemon proxy settings.
+VM, the GitHub deploy key (needed only if the repository is private), `ufw`, the NAS mount, and the apt and Docker daemon proxy settings.
 
 Expect about an hour of hands-on work. Waiting for the certificate, DNS, firewall changes and
 the Orion account usually takes longer, so request those first (§0).
@@ -66,15 +67,11 @@ the Orion account usually takes longer, so request those first (§0).
   | Outbound  | VM → Orion server                  | TCP 17774        | SWIS                                                                                                                                                                                                                                          |
   | Outbound  | VM → internet                      | TCP 443          | **At run time:** `login.microsoftonline.com`, the Teams Workflows host (`*.logic.azure.com` / `*.powerplatform.com`), `api.pushover.net`, `api.twilio.com`, `api.anthropic.com` (optional AI).                                                |
   | Outbound  | VM → internet                      | TCP 443          | **To install and upgrade:** Ubuntu mirrors (`archive.ubuntu.com`, `security.ubuntu.com`), `download.docker.com`, Docker Hub (`registry-1.docker.io`, `auth.docker.io`, `production.cloudflare.docker.com`), `registry.npmjs.org`, and GitHub. |
-  | Outbound  | VM → GitHub                        | TCP 22           | `git clone` / `git pull` over SSH (or use port 443, see §3)                                                                                                                                                                                   |
   | Outbound  | VM → NAS                           | TCP 445          | Backups (§9)                                                                                                                                                                                                                                  |
 
   People's browsers, not the VM, load map tiles from `tile.openstreetmap.org`, unless you use an
   offline map image (Settings → Map & wall). If the VM can reach the internet only through a
   web proxy, read §13 before §2.
-
-- **Someone who can add a deploy key** to the GitHub repository,
-  [farmera2005/MercerAlertService](https://github.com/farmera2005/MercerAlertService) (§3).
 
 ---
 
@@ -189,18 +186,46 @@ Sign out and back in for the group to take effect. The rest of this guide assume
 
 ## 3. Get the code
 
-The code is in the private GitHub repository
-**[farmera2005/MercerAlertService](https://github.com/farmera2005/MercerAlertService)**:
+The code is in the public GitHub repository
+**[farmera2005/MercerAlertService](https://github.com/farmera2005/MercerAlertService)**. Clone
+it over HTTPS. That needs no GitHub account, key or SSH setup, only outbound HTTPS to
+`github.com`.
 
-| What           | Value                                               |
-| -------------- | --------------------------------------------------- |
-| Web page       | `https://github.com/farmera2005/MercerAlertService` |
-| Clone over SSH | `git@github.com:farmera2005/MercerAlertService.git` |
-| Default branch | `claude/solarwinds-alert-correlation-90rlgx`        |
+| What           | Value                                                   |
+| -------------- | ------------------------------------------------------- |
+| Web page       | `https://github.com/farmera2005/MercerAlertService`     |
+| Clone (HTTPS)  | `https://github.com/farmera2005/MercerAlertService.git` |
+| Default branch | `claude/solarwinds-alert-correlation-90rlgx`            |
 
-Because the repository is private, the VM uses a read-only **deploy key**. Run every command
-in this section as your own admin account, **without `sudo`**. Root has its own `~/.ssh`
-without the key, so `sudo git clone` fails with `Permission denied (publickey)`.
+Create the directory, owned by your own admin account:
+
+```bash
+sudo install -d -o $USER -g $USER /opt/mercer-alert-service
+```
+
+Clone without `sudo`, so the files belong to you and `git pull` works later:
+
+```bash
+git clone https://github.com/farmera2005/MercerAlertService.git /opt/mercer-alert-service
+```
+
+Use the HTTPS address, not `git@github.com:…`. Over SSH, GitHub asks for a key it knows even
+when the repository is public, and the clone fails with `Permission denied (publickey)`.
+
+The clone checks out the default branch, which holds the current version; there are no release
+tags yet. Once releases are tagged, pin production to one, for example:
+
+```bash
+cd /opt/mercer-alert-service && git checkout v1.0.0
+```
+
+The rest of this guide runs commands from `/opt/mercer-alert-service`.
+
+### If the repository is made private again
+
+An HTTPS clone then needs credentials. A read-only **deploy key** over SSH is the simplest way
+to give the VM access. Run these as your own admin account, **without `sudo`**: root has its
+own `~/.ssh` without the key.
 
 Create the key on the VM:
 
@@ -256,24 +281,12 @@ If it says `Permission denied (publickey)` instead:
    ssh-keygen -lf ~/.ssh/mas_deploy.pub
    ```
 
-Clone into `/opt/mercer-alert-service`:
+Then point the existing clone at the SSH address. For a new install, clone from
+`git@github.com:farmera2005/MercerAlertService.git` instead.
 
 ```bash
-sudo install -d -o $USER -g $USER /opt/mercer-alert-service
+git -C /opt/mercer-alert-service remote set-url origin git@github.com:farmera2005/MercerAlertService.git
 ```
-
-```bash
-git clone git@github.com:farmera2005/MercerAlertService.git /opt/mercer-alert-service
-```
-
-The clone checks out the default branch, which holds the current version; there are no release
-tags yet. Once releases are tagged, pin production to one, for example:
-
-```bash
-cd /opt/mercer-alert-service && git checkout v1.0.0
-```
-
-The rest of this guide runs commands from `/opt/mercer-alert-service`.
 
 ---
 
@@ -837,20 +850,20 @@ CA:
 
 ## 14. Troubleshooting
 
-| Symptom                                                                                      | Cause and fix                                                                                                                                                        |
-| -------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `git clone` fails with `Permission denied (publickey)`                                       | The command ran with `sudo`, the `Host github.com` block is missing from `~/.ssh/config`, or the deploy key isn't on the repository. §3 has the checks.              |
-| `docker compose` isn't found, or rejects the `required` key under `env_file`                 | Compose is missing or older than 2.24. Install it from Docker's repository (§2).                                                                                     |
-| `permission denied while trying to connect to the Docker daemon socket`                      | Your account isn't in the `docker` group yet: sign out and back in after `usermod` (§2), or use `sudo`.                                                              |
-| `failed to bind host port … address already in use`                                          | Something else uses that port. For 5432 (a local Postgres), set `DB_PORT=55432` in `.env`. For 3000, set `WEB_PORT=127.0.0.1:3001` and change `proxy_pass` to match. |
-| The build fails with `SELF_SIGNED_CERT_IN_CHAIN` or `unable to get local issuer certificate` | A TLS-inspecting proxy: §13, `BUILD_CA_FILE`.                                                                                                                        |
-| No setup code in the log                                                                     | Setup is already complete (sign in instead), or `web` hasn't started: `docker compose ps -a`, `docker compose logs web`.                                             |
-| nginx: `socket() [::]:80 failed (97: …)`                                                     | IPv6 is disabled: remove the `listen [::]` lines (§6).                                                                                                               |
-| `502 Bad Gateway` from nginx                                                                 | `web` isn't running or listens elsewhere: `docker compose ps -a`, then check that `proxy_pass` matches `WEB_PORT`.                                                   |
-| `413 Request Entity Too Large` when uploading a map image                                    | `client_max_body_size` is missing from the nginx site (§6).                                                                                                          |
-| The audit log shows `172.x.x.x` for everyone                                                 | Turn on **Behind a reverse proxy** in Settings → General (§8).                                                                                                       |
-| The dot next to your name says **Reconnecting** all the time                                 | Something between the browser and MAS buffers or cuts long requests. Use the nginx site as given; check any other proxy or load balancer in the path.                |
-| **Test connection** to Orion times out                                                       | Firewall between the VM and Orion on 17774 (check with the `curl` in §1).                                                                                            |
-| Orion fails with a certificate error                                                         | Fetch and trust the certificate again in Settings → SolarWinds, and check **Certificate name** ([The Orion certificate](../README.md#the-orion-certificate)).        |
-| The VM's disk is filling up                                                                  | `docker system df`, then `docker builder prune -f`. Check `BACKUP_KEEP_DAYS` and the retention settings in Settings → General.                                       |
-| Teams, SMS or AI calls fail behind a web proxy                                               | `NODE_USE_ENV_PROXY=1` and the proxy variables in `.env` (§13), plus the CA override if the proxy inspects TLS.                                                      |
+| Symptom                                                                                      | Cause and fix                                                                                                                                                         |
+| -------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `git clone` fails with `Permission denied (publickey)`                                       | You used the SSH address `git@github.com:…`: use the HTTPS address in §3, which needs no key. If the repository is private, §3's deploy-key steps include the checks. |
+| `docker compose` isn't found, or rejects the `required` key under `env_file`                 | Compose is missing or older than 2.24. Install it from Docker's repository (§2).                                                                                      |
+| `permission denied while trying to connect to the Docker daemon socket`                      | Your account isn't in the `docker` group yet: sign out and back in after `usermod` (§2), or use `sudo`.                                                               |
+| `failed to bind host port … address already in use`                                          | Something else uses that port. For 5432 (a local Postgres), set `DB_PORT=55432` in `.env`. For 3000, set `WEB_PORT=127.0.0.1:3001` and change `proxy_pass` to match.  |
+| The build fails with `SELF_SIGNED_CERT_IN_CHAIN` or `unable to get local issuer certificate` | A TLS-inspecting proxy: §13, `BUILD_CA_FILE`.                                                                                                                         |
+| No setup code in the log                                                                     | Setup is already complete (sign in instead), or `web` hasn't started: `docker compose ps -a`, `docker compose logs web`.                                              |
+| nginx: `socket() [::]:80 failed (97: …)`                                                     | IPv6 is disabled: remove the `listen [::]` lines (§6).                                                                                                                |
+| `502 Bad Gateway` from nginx                                                                 | `web` isn't running or listens elsewhere: `docker compose ps -a`, then check that `proxy_pass` matches `WEB_PORT`.                                                    |
+| `413 Request Entity Too Large` when uploading a map image                                    | `client_max_body_size` is missing from the nginx site (§6).                                                                                                           |
+| The audit log shows `172.x.x.x` for everyone                                                 | Turn on **Behind a reverse proxy** in Settings → General (§8).                                                                                                        |
+| The dot next to your name says **Reconnecting** all the time                                 | Something between the browser and MAS buffers or cuts long requests. Use the nginx site as given; check any other proxy or load balancer in the path.                 |
+| **Test connection** to Orion times out                                                       | Firewall between the VM and Orion on 17774 (check with the `curl` in §1).                                                                                             |
+| Orion fails with a certificate error                                                         | Fetch and trust the certificate again in Settings → SolarWinds, and check **Certificate name** ([The Orion certificate](../README.md#the-orion-certificate)).         |
+| The VM's disk is filling up                                                                  | `docker system df`, then `docker builder prune -f`. Check `BACKUP_KEEP_DAYS` and the retention settings in Settings → General.                                        |
+| Teams, SMS or AI calls fail behind a web proxy                                               | `NODE_USE_ENV_PROXY=1` and the proxy variables in `.env` (§13), plus the CA override if the proxy inspects TLS.                                                       |

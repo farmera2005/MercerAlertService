@@ -5,6 +5,10 @@ on:
     branches: [main, 'claude/**']
   pull_request:
 
+# Public repository: the workflow only reads the code; pull requests from forks get no secrets.
+permissions:
+  contents: read
+
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true

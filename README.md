@@ -47,14 +47,13 @@ Requirements:
   `*.powerplatform.com`), `api.pushover.net` and `api.twilio.com` for notifications, and
   `api.anthropic.com` for AI summaries and digests (optional).
 
-The code is in the private repository
-[farmera2005/MercerAlertService](https://github.com/farmera2005/MercerAlertService). The VM
-needs read access before the clone below works: a deploy key, and SSH told to use it for
-github.com. [Install guide §3](docs/install-ubuntu.md#3-get-the-code) shows how. Run the clone
-without `sudo`.
+The code is in the public repository
+[farmera2005/MercerAlertService](https://github.com/farmera2005/MercerAlertService). Clone it
+over HTTPS, as your own account rather than with `sudo`; no GitHub account or key is needed.
 
 ```bash
-git clone git@github.com:farmera2005/MercerAlertService.git /opt/mercer-alert-service && cd /opt/mercer-alert-service
+sudo install -d -o $USER -g $USER /opt/mercer-alert-service
+git clone https://github.com/farmera2005/MercerAlertService.git /opt/mercer-alert-service && cd /opt/mercer-alert-service
 docker compose up -d --build
 docker compose logs web | grep -i "setup code"
 ```
