@@ -1,15 +1,23 @@
 # MercerAlertService on a Linux VM that can reach Orion on TCP 17774.
 #
-#   docker compose up -d --build
+#   docker compose pull && docker compose up -d
 #   then open http://<vm>:3000 and follow the setup wizard.
+#
+# The images are built and published by CI (ghcr.io/farmera2005/mercer-alert-service-*), so the VM
+# downloads them and builds nothing. MAS_VERSION picks a tag (default: latest). To build from this
+# checkout instead: docker compose build, then docker compose up -d.
 #
 # No .env file is needed: the `init` container generates the database password and the key that
 # encrypts secrets saved in the web UI. A .env file is still honoured if present — any setting in it
 # overrides (and locks) the matching field in the web UI. See .env.example.
 #
-# Test against the bundled fake Orion:  docker compose --profile dev up -d --build
+# Test against the bundled fake Orion:  docker compose --profile dev up -d
 # then in the wizard use base URL http://mock-swis:17774, user "mas", password "mas".
 name: mercer-alert-service
+
+x-images:
+  # Published images; MAS_REGISTRY points elsewhere for a mirror or a private registry.
+  worker: &worker-image ${MAS_REGISTRY:-ghcr.io/farmera2005}/mercer-alert-service-worker:${MAS_VERSION:-latest}
 
 x-env-file: &env-file
   env_file:
@@ -40,7 +48,7 @@ services:
       target: worker
       args: { APP_VERSION: '${APP_VERSION:-dev}' }
       secrets: [build_ca]
-    image: mercer-alert-service/worker:${APP_VERSION:-dev}
+    image: *worker-image
     user: root
     command: ['node', 'dist/init.js']
     environment:
@@ -77,9 +85,7 @@ services:
 
   migrate:
     <<: *app
-    image: mercer-alert-service/worker:${APP_VERSION:-dev}
-    # Built locally by `init` (same image); never look for it on Docker Hub.
-    pull_policy: never
+    image: *worker-image
     command: ['node', 'dist/migrate.js']
     restart: 'no'
     depends_on:
@@ -87,8 +93,7 @@ services:
 
   worker:
     <<: *app
-    image: mercer-alert-service/worker:${APP_VERSION:-dev}
-    pull_policy: never
+    image: *worker-image
     restart: unless-stopped
     depends_on:
       migrate: { condition: service_completed_successfully }
@@ -98,7 +103,7 @@ services:
   web:
     <<: *app
     build: { <<: *build, target: web }
-    image: mercer-alert-service/web:${APP_VERSION:-dev}
+    image: ${MAS_REGISTRY:-ghcr.io/farmera2005}/mercer-alert-service-web:${MAS_VERSION:-latest}
     restart: unless-stopped
     ports:
       - '${WEB_PORT:-3000}:3000'
@@ -127,7 +132,7 @@ services:
   mock-swis:
     profiles: [dev]
     build: { <<: *build, target: mock-swis }
-    image: mercer-alert-service/mock-swis:dev
+    image: ${MAS_REGISTRY:-ghcr.io/farmera2005}/mercer-alert-service-mock-swis:${MAS_VERSION:-latest}
     restart: unless-stopped
     ports:
       - '127.0.0.1:17774:17774'

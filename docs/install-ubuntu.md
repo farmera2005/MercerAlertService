@@ -9,7 +9,7 @@ MAS configuration file is needed.
 nginx 1.24:
 
 - cloning the public repository over HTTPS without credentials;
-- building and starting the stack;
+- downloading the images from a registry and starting the stack (no build on the VM);
 - the nginx site (HTTPS, live updates, sign-in, uploads, client addresses);
 - backup, restore, and rebuilding on a new VM from the master key;
 - recovery after a Docker restart;
@@ -28,7 +28,7 @@ the Orion account usually takes longer, so request those first (§0).
 2. [Install Docker Engine](#2-install-docker-engine)
 3. [Get the code](#3-get-the-code)
 4. [Host settings (`.env`, optional)](#4-host-settings-env-optional)
-5. [Build and start](#5-build-and-start)
+5. [Download and start](#5-download-and-start)
 6. [HTTPS with nginx](#6-https-with-nginx)
 7. [Firewall](#7-firewall)
 8. [Finish setup in the browser](#8-finish-setup-in-the-browser)
@@ -45,12 +45,12 @@ the Orion account usually takes longer, so request those first (§0).
 
 **The VM**
 
-| What        | Recommended                                          | Why                                                                                                                                           |
-| ----------- | ---------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
-| OS          | Ubuntu Server **24.04 LTS** (26.04 LTS also OK)      | Docker's repository supports 22.04, 24.04 and 26.04.                                                                                          |
-| CPU and RAM | 2 vCPU, 4 GB                                         | The running stack uses about 400 MB. Building the images (install and upgrades) needs the rest.                                               |
-| Disk        | 40 GB                                                | Images take about 1.4 GB and the build cache up to 8 GB (it can be pruned). The database grows with history: watch it in the first few weeks. |
-| Network     | Static IP and a DNS name, e.g. `netmon.mercer.local` | People, the wall TVs and Teams links use the name.                                                                                            |
+| What        | Recommended                                          | Why                                                                                                                                            |
+| ----------- | ---------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| OS          | Ubuntu Server **24.04 LTS** (26.04 LTS also OK)      | Docker's repository supports 22.04, 24.04 and 26.04.                                                                                           |
+| CPU and RAM | 2 vCPU, 4 GB                                         | The running stack uses about 400 MB; the rest is headroom for the database. Building the images yourself (optional, §11) also fits.            |
+| Disk        | 30 GB                                                | Images take about 1.2 GB. The database grows with history: watch it in the first few weeks. Building images yourself adds up to 8 GB of cache. |
+| Network     | Static IP and a DNS name, e.g. `netmon.mercer.local` | People, the wall TVs and Teams links use the name.                                                                                             |
 
 **Ask for these early**
 
@@ -60,14 +60,14 @@ the Orion account usually takes longer, so request those first (§0).
   [Create the read-only Orion account](../README.md#create-the-read-only-orion-account-in-orion)).
 - **Firewall rules:**
 
-  | Direction | From → to                          | Port             | For                                                                                                                                                                                                                                           |
-  | --------- | ---------------------------------- | ---------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-  | Inbound   | IT and user subnets, wall TVs → VM | TCP 443 (and 80) | The dashboard. Port 80 only redirects to 443.                                                                                                                                                                                                 |
-  | Inbound   | IT admin workstations → VM         | TCP 22           | SSH                                                                                                                                                                                                                                           |
-  | Outbound  | VM → Orion server                  | TCP 17774        | SWIS                                                                                                                                                                                                                                          |
-  | Outbound  | VM → internet                      | TCP 443          | **At run time:** `login.microsoftonline.com`, the Teams Workflows host (`*.logic.azure.com` / `*.powerplatform.com`), `api.pushover.net`, `api.twilio.com`, `api.anthropic.com` (optional AI).                                                |
-  | Outbound  | VM → internet                      | TCP 443          | **To install and upgrade:** Ubuntu mirrors (`archive.ubuntu.com`, `security.ubuntu.com`), `download.docker.com`, Docker Hub (`registry-1.docker.io`, `auth.docker.io`, `production.cloudflare.docker.com`), `registry.npmjs.org`, and GitHub. |
-  | Outbound  | VM → NAS                           | TCP 445          | Backups (§9)                                                                                                                                                                                                                                  |
+  | Direction | From → to                          | Port             | For                                                                                                                                                                                                                                                                                                                                                                                            |
+  | --------- | ---------------------------------- | ---------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+  | Inbound   | IT and user subnets, wall TVs → VM | TCP 443 (and 80) | The dashboard. Port 80 only redirects to 443.                                                                                                                                                                                                                                                                                                                                                  |
+  | Inbound   | IT admin workstations → VM         | TCP 22           | SSH                                                                                                                                                                                                                                                                                                                                                                                            |
+  | Outbound  | VM → Orion server                  | TCP 17774        | SWIS                                                                                                                                                                                                                                                                                                                                                                                           |
+  | Outbound  | VM → internet                      | TCP 443          | **At run time:** `login.microsoftonline.com`, the Teams Workflows host (`*.logic.azure.com` / `*.powerplatform.com`), `api.pushover.net`, `api.twilio.com`, `api.anthropic.com` (optional AI).                                                                                                                                                                                                 |
+  | Outbound  | VM → internet                      | TCP 443          | **To install and upgrade:** Ubuntu mirrors (`archive.ubuntu.com`, `security.ubuntu.com`), `download.docker.com`, GitHub (`github.com`) and its container registry (`ghcr.io`, `pkg-containers.githubusercontent.com`), and Docker Hub for Postgres (`registry-1.docker.io`, `auth.docker.io`, `production.cloudflare.docker.com`). `registry.npmjs.org` only if you build the images yourself. |
+  | Outbound  | VM → NAS                           | TCP 445          | Backups (§9)                                                                                                                                                                                                                                                                                                                                                                                   |
 
   People's browsers, not the VM, load map tiles from `tile.openstreetmap.org`, unless you use an
   offline map image (Settings → Map & wall). If the VM can reach the internet only through a
@@ -329,7 +329,7 @@ Other host-side variables you might add later:
 | `DB_PORT`         | `5432`      | Another Postgres already uses 5432 on this VM.  |
 | `BACKUP_HOST_DIR` | `./backups` | Backups should go straight to a NAS share (§9). |
 | `BACKUP_TIME`     | `02:30`     | Nightly backup time, local time.                |
-| `BUILD_CA_FILE`   | (empty)     | Builds go through a TLS-inspecting proxy (§13). |
+| `MAS_VERSION`     | `latest`    | Pin a published version, e.g. `v1.0.0` (§11).   |
 
 [.env.example](../.env.example) lists every variable. Any **MAS setting** you put in `.env`
 overrides the web UI and shows as locked there, so leave those out unless you manage the VM as
@@ -337,25 +337,21 @@ code. `.env` is in `.gitignore`: never commit it.
 
 ---
 
-## 5. Build and start
+## 5. Download and start
 
-The build downloads packages from inside containers, and those can be blocked even when the VM
-itself has internet access. Check first; it takes seconds, and the build takes minutes:
-
-```bash
-docker run --rm node:24-bookworm-slim node -e "fetch('https://registry.npmjs.org/pnpm',{method:'HEAD'}).then(r=>console.log('OK',r.status)).catch(e=>console.log('FAILED:',e.cause?.code||e.cause?.message||e.message))"
-```
-
-It should print `OK 200`. If it prints `FAILED: …`, fix that first: see
-[The build can't download packages](#the-build-cant-download-packages).
-
-Then build and start:
+MAS comes as ready-made images. CI builds and tests them, then publishes them at
+`ghcr.io/farmera2005/mercer-alert-service-*`. The VM only downloads them: nothing is built on
+it, so the install needs no npm access, build CA or build time.
 
 ```bash
-APP_VERSION=$(git describe --always) docker compose up -d --build
+docker compose pull
 ```
 
-The first build takes about 5–10 minutes. Then check the state:
+```bash
+docker compose up -d
+```
+
+The download is about 300 MB. Then check the state:
 
 ```bash
 docker compose ps -a
@@ -386,12 +382,39 @@ Check health from the VM. The response should be HTTP 200 with `"status":"setup_
 curl -sS http://127.0.0.1:3000/api/health
 ```
 
+MAS also calls out to the internet: Microsoft sign-in, Teams, SMS and push, and Claude. Check
+that the containers can get out. A VM can have internet access while its containers don't.
+
+```bash
+docker compose exec web node -e "fetch('https://login.microsoftonline.com/common/v2.0/.well-known/openid-configuration').then(r=>console.log('OK',r.status)).catch(e=>console.log('FAILED:',e.cause?.code||e.cause?.message||e.message))"
+```
+
+It should print `OK 200`. If it prints `FAILED: …`, see
+[Containers can't reach the internet](#containers-cant-reach-the-internet).
+
 Don't open the wizard yet if you're about to set up nginx. Doing §6 first means the wizard
 already runs under the final HTTPS address.
 
 ---
 
 ## 6. HTTPS with nginx
+
+**Can this wait?** For a first trial, yes. Skip §6, open `http://netmon.mercer.local:3000` and
+sign in with the local administrator. Docker publishes port 3000 itself, so no firewall rule is
+needed for it (§7). Add HTTPS before go-live, for two reasons:
+
+- **Microsoft sign-in** only accepts `https://` addresses.
+- **Without HTTPS**, passwords and sign-in cookies cross the network unencrypted.
+
+When you add it later:
+
+- set `WEB_PORT=127.0.0.1:3000` (§4);
+- run `docker compose up -d`;
+- change the **Dashboard URL** to `https://…` (§8).
+
+The certificate is the one thing to request. If IT already runs a reverse proxy or a firewall
+that terminates HTTPS for internal sites, it can do this job instead of nginx. Point it at port
+3000 of this VM and keep the forwarded-header settings shown below.
 
 Install nginx and put the certificate in place:
 
@@ -669,22 +692,16 @@ which stays stopped until you run `docker compose up -d`.
    docker compose exec backup /backup.sh now
    ```
 
-2. Get the new version. While production follows the default branch (the setup in §3):
+2. Update the checkout, for any changes to `docker-compose.yml` and the backup script:
 
    ```bash
    git pull --ff-only
    ```
 
-   Once production is pinned to release tags, check out the new tag instead:
+3. Download the new images and restart. This also applies database migrations:
 
    ```bash
-   git fetch --tags && git checkout v1.1.0
-   ```
-
-3. Rebuild and restart. This also applies database migrations:
-
-   ```bash
-   APP_VERSION=$(git describe --always) docker compose up -d --build
+   docker compose pull && docker compose up -d
    ```
 
 4. Check that everything is up:
@@ -693,14 +710,32 @@ which stays stopped until you run `docker compose up -d`.
    docker compose ps -a && curl -fsS http://127.0.0.1:3000/api/health
    ```
 
-5. Reclaim disk from old images and the build cache:
+5. Reclaim the disk space used by the old images:
 
    ```bash
-   docker image prune -f && docker builder prune -f
+   docker image prune -f
    ```
 
-Migrations only move forward. To roll back, check out the previous version and restore the
-backup from step 1 (§12).
+`latest` follows the default branch. CI publishes it only after the tests and browser tests
+pass, about 20 minutes after a change lands. To control when production changes, pin a version
+in `.env`. Choose `v1.0.0` style tags once releases are tagged, or a `sha-xxxxxxx` tag from the
+repository's **Packages** page. Then run steps 3–5:
+
+```bash
+printf 'MAS_VERSION=v1.0.0\n' >> .env
+```
+
+Migrations only move forward. To roll back, set `MAS_VERSION` back to the previous version and
+restore the backup from step 1 (§12).
+
+**Building the images yourself (optional).** This is for a VM without access to `ghcr.io`, or
+to run local changes. It needs `registry.npmjs.org`, and behind a TLS-inspecting firewall also
+`BUILD_CA_FILE` (§13). It takes 5–10 minutes. A later `docker compose pull` replaces the local
+build with the published images.
+
+```bash
+APP_VERSION=$(git describe --always) docker compose build && docker compose up -d
+```
 
 **Ubuntu and Docker updates.** `unattended-upgrades` installs Ubuntu security updates but not
 Docker packages, which come from Docker's repository. Upgrade Docker during a maintenance
@@ -742,10 +777,10 @@ live one fails on the job queue's partitioned tables.
 **Rebuild on a new VM.**
 
 1. Do §1–§4 on the new VM, but don't start MAS yet.
-2. Build the images:
+2. Download the images (the same version as before, if you pinned `MAS_VERSION`):
 
    ```bash
-   APP_VERSION=$(git describe --always) docker compose build
+   docker compose pull
    ```
 
 3. Put the saved master key in place **before** the first start. The `init` container keeps an
@@ -805,8 +840,8 @@ Then restart Docker:
 sudo systemctl restart docker
 ```
 
-**Image builds.** In `~/.docker/config.json` of the user who runs `docker compose`, add the
-following. Docker passes it to every build.
+**Image builds** (only if you build the images yourself, §11). In `~/.docker/config.json` of
+the user who runs `docker compose`, add the following. Docker passes it to every build.
 
 ```json
 {
@@ -832,8 +867,12 @@ NO_PROXY=localhost,127.0.0.1,.mercer.local
 NODE_USE_ENV_PROXY=1
 ```
 
-**If the proxy inspects TLS** (it presents its own certificates), everything must also trust its
-CA:
+**If the proxy or firewall inspects TLS** (it presents its own certificates), the simplest fix
+needs no certificate work: ask for **this VM's address to be exempt from TLS inspection** (on a
+FortiGate, a firewall policy for the VM with no SSL deep inspection). MAS only talks to the
+services in §0, so exempting the VM is a narrow change.
+
+If an exemption isn't possible, everything on the VM must trust the inspecting CA:
 
 1. Save the CA certificate as `secrets/corp-ca.pem` in the project directory. `secrets/` is in
    `.gitignore`. Then make the file readable by the containers:
@@ -852,7 +891,8 @@ CA:
    sudo systemctl restart docker
    ```
 
-3. **For builds**, add `BUILD_CA_FILE=./secrets/corp-ca.pem` to `.env`.
+3. **For builds** (only if you build the images yourself), add
+   `BUILD_CA_FILE=./secrets/corp-ca.pem` to `.env`.
 4. **At run time**, create `docker-compose.override.yml` next to `docker-compose.yml`. Compose
    loads it automatically, and it is in `.gitignore`.
 
@@ -878,46 +918,54 @@ CA:
 
 ## 14. Troubleshooting
 
-| Symptom                                                                                                                                                                                                         | Cause and fix                                                                                                                                                         |
-| --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `git clone` fails with `Permission denied (publickey)`                                                                                                                                                          | You used the SSH address `git@github.com:…`: use the HTTPS address in §3, which needs no key. If the repository is private, §3's deploy-key steps include the checks. |
-| `docker compose` isn't found, or rejects the `required` key under `env_file`                                                                                                                                    | Compose is missing or older than 2.24. Install it from Docker's repository (§2).                                                                                      |
-| `permission denied while trying to connect to the docker API at unix:///var/run/docker.sock` (older Docker: `…the Docker daemon socket`)                                                                        | Your session isn't in the `docker` group. Run `id -nG`: if `docker` is missing, run `sudo usermod -aG docker $USER`, then sign out and SSH back in (§2).              |
-| `failed to bind host port … address already in use`                                                                                                                                                             | Something else uses that port. For 5432 (a local Postgres), set `DB_PORT=55432` in `.env`. For 3000, set `WEB_PORT=127.0.0.1:3001` and change `proxy_pass` to match.  |
-| The build fails at `corepack prepare pnpm…` or `pnpm install` with `Error when performing the request to https://registry.npmjs.org/…`, `SELF_SIGNED_CERT_IN_CHAIN` or `unable to get local issuer certificate` | The build containers can't reach the npm registry. See [The build can't download packages](#the-build-cant-download-packages) below.                                  |
-| No setup code in the log                                                                                                                                                                                        | Setup is already complete (sign in instead), or `web` hasn't started: `docker compose ps -a`, `docker compose logs web`.                                              |
-| nginx: `socket() [::]:80 failed (97: …)`                                                                                                                                                                        | IPv6 is disabled: remove the `listen [::]` lines (§6).                                                                                                                |
-| `502 Bad Gateway` from nginx                                                                                                                                                                                    | `web` isn't running or listens elsewhere: `docker compose ps -a`, then check that `proxy_pass` matches `WEB_PORT`.                                                    |
-| `413 Request Entity Too Large` when uploading a map image                                                                                                                                                       | `client_max_body_size` is missing from the nginx site (§6).                                                                                                           |
-| The audit log shows `172.x.x.x` for everyone                                                                                                                                                                    | Turn on **Behind a reverse proxy** in Settings → General (§8).                                                                                                        |
-| The dot next to your name says **Reconnecting** all the time                                                                                                                                                    | Something between the browser and MAS buffers or cuts long requests. Use the nginx site as given; check any other proxy or load balancer in the path.                 |
-| **Test connection** to Orion times out                                                                                                                                                                          | Firewall between the VM and Orion on 17774 (check with the `curl` in §1).                                                                                             |
-| Orion fails with a certificate error                                                                                                                                                                            | Fetch and trust the certificate again in Settings → SolarWinds, and check **Certificate name** ([The Orion certificate](../README.md#the-orion-certificate)).         |
-| The VM's disk is filling up                                                                                                                                                                                     | `docker system df`, then `docker builder prune -f`. Check `BACKUP_KEEP_DAYS` and the retention settings in Settings → General.                                        |
-| Teams, SMS or AI calls fail behind a web proxy                                                                                                                                                                  | `NODE_USE_ENV_PROXY=1` and the proxy variables in `.env` (§13), plus the CA override if the proxy inspects TLS.                                                       |
+| Symptom                                                                                                                                                   | Cause and fix                                                                                                                                                                                      |
+| --------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `git clone` fails with `Permission denied (publickey)`                                                                                                    | You used the SSH address `git@github.com:…`: use the HTTPS address in §3, which needs no key. If the repository is private, §3's deploy-key steps include the checks.                              |
+| `docker compose` isn't found, or rejects the `required` key under `env_file`                                                                              | Compose is missing or older than 2.24. Install it from Docker's repository (§2).                                                                                                                   |
+| `permission denied while trying to connect to the docker API at unix:///var/run/docker.sock` (older Docker: `…the Docker daemon socket`)                  | Your session isn't in the `docker` group. Run `id -nG`: if `docker` is missing, run `sudo usermod -aG docker $USER`, then sign out and SSH back in (§2).                                           |
+| `failed to bind host port … address already in use`                                                                                                       | Something else uses that port. For 5432 (a local Postgres), set `DB_PORT=55432` in `.env`. For 3000, set `WEB_PORT=127.0.0.1:3001` and change `proxy_pass` to match.                               |
+| `docker compose pull` fails with `denied`, `unauthorized` or `manifest unknown`                                                                           | The image or tag doesn't exist, or the VM can't reach `ghcr.io`. Check `MAS_VERSION` and `MAS_REGISTRY` in `.env`, and that `ghcr.io` and `pkg-containers.githubusercontent.com` are allowed (§0). |
+| The §5 check prints `FAILED: …`, or Teams, SMS or AI calls fail                                                                                           | See [Containers can't reach the internet](#containers-cant-reach-the-internet) below.                                                                                                              |
+| Building the images yourself fails at `corepack prepare pnpm…` or `pnpm install` with `Error when performing the request to https://registry.npmjs.org/…` | The same causes as below, for the npm registry. Run the build check under [Containers can't reach the internet](#containers-cant-reach-the-internet).                                              |
+| No setup code in the log                                                                                                                                  | Setup is already complete (sign in instead), or `web` hasn't started: `docker compose ps -a`, `docker compose logs web`.                                                                           |
+| nginx: `socket() [::]:80 failed (97: …)`                                                                                                                  | IPv6 is disabled: remove the `listen [::]` lines (§6).                                                                                                                                             |
+| `502 Bad Gateway` from nginx                                                                                                                              | `web` isn't running or listens elsewhere: `docker compose ps -a`, then check that `proxy_pass` matches `WEB_PORT`.                                                                                 |
+| `413 Request Entity Too Large` when uploading a map image                                                                                                 | `client_max_body_size` is missing from the nginx site (§6).                                                                                                                                        |
+| The audit log shows `172.x.x.x` for everyone                                                                                                              | Turn on **Behind a reverse proxy** in Settings → General (§8).                                                                                                                                     |
+| The dot next to your name says **Reconnecting** all the time                                                                                              | Something between the browser and MAS buffers or cuts long requests. Use the nginx site as given; check any other proxy or load balancer in the path.                                              |
+| **Test connection** to Orion times out                                                                                                                    | Firewall between the VM and Orion on 17774 (check with the `curl` in §1).                                                                                                                          |
+| Orion fails with a certificate error                                                                                                                      | Fetch and trust the certificate again in Settings → SolarWinds, and check **Certificate name** ([The Orion certificate](../README.md#the-orion-certificate)).                                      |
+| The VM's disk is filling up                                                                                                                               | `docker system df`, then `docker builder prune -f`. Check `BACKUP_KEEP_DAYS` and the retention settings in Settings → General.                                                                     |
+| Teams, SMS or AI calls fail behind a web proxy                                                                                                            | `NODE_USE_ENV_PROXY=1` and the proxy variables in `.env` (§13), plus the CA override if the proxy inspects TLS.                                                                                    |
 
-### The build can't download packages
+### Containers can't reach the internet
 
-Corepack and pnpm only report that the download failed. To see why, run the check from §5. It
-uses the same base image and the same Docker network as the build:
+A VM can reach the internet while its containers can't: they get their own DNS settings and
+network. Run the check from §5 inside MAS:
 
 ```bash
-docker run --rm node:24-bookworm-slim node -e "fetch('https://registry.npmjs.org/pnpm',{method:'HEAD'}).then(r=>console.log('OK',r.status)).catch(e=>console.log('FAILED:',e.cause?.code||e.cause?.message||e.message))"
+docker compose exec web node -e "fetch('https://login.microsoftonline.com/common/v2.0/.well-known/openid-configuration').then(r=>console.log('OK',r.status)).catch(e=>console.log('FAILED:',e.cause?.code||e.cause?.message||e.message))"
 ```
 
 Compare with the VM itself:
 
 ```bash
-curl -sSI -o /dev/null -w '%{http_code}\n' https://registry.npmjs.org/pnpm
+curl -sSI -o /dev/null -w '%{http_code}\n' https://login.microsoftonline.com/common/v2.0/.well-known/openid-configuration
 ```
 
-| The check prints                                                                                                       | Cause                                                                                                                                                                        | Fix                                                                                                                      |
-| ---------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
-| `FAILED: EAI_AGAIN` or `FAILED: ENOTFOUND`, and `curl` prints `200`                                                    | Containers can't resolve names. When Docker finds no usable DNS server on the VM, it gives containers Google's `8.8.8.8` / `8.8.4.4`, which corporate firewalls often block. | Give Docker your DNS servers (below).                                                                                    |
-| `FAILED: SELF_SIGNED_CERT_IN_CHAIN`, `UNABLE_TO_GET_ISSUER_CERT_LOCALLY` or `UNABLE_TO_VERIFY_LEAF_SIGNATURE`          | A firewall or proxy inspects TLS (for example FortiGate SSL deep inspection) and presents its own certificate.                                                               | Ask for the build hosts in §0 to be exempt from inspection, or give the build the inspecting CA: `BUILD_CA_FILE` in §13. |
-| `FAILED: UND_ERR_CONNECT_TIMEOUT`, `ETIMEDOUT`, `ECONNREFUSED` or `ECONNRESET`, and `curl` fails too (or prints `000`) | The firewall doesn't let the VM reach the npm registry.                                                                                                                      | Allow the install-and-upgrade hosts in §0, or use the web proxy (§13).                                                   |
-| The same errors, but `curl` prints `200`                                                                               | Only container traffic is affected, often because the network's MTU is below 1500 and large TLS packets are dropped.                                                         | Check `ip link` for the VM's interface MTU. If it is below 1500, set Docker's MTU to that value or lower (below).        |
-| `OK 200`                                                                                                               | The registry was briefly unreachable.                                                                                                                                        | Run the build again.                                                                                                     |
+When building the images yourself, check the npm registry the same way:
+
+```bash
+docker run --rm node:24-bookworm-slim node -e "fetch('https://registry.npmjs.org/pnpm',{method:'HEAD'}).then(r=>console.log('OK',r.status)).catch(e=>console.log('FAILED:',e.cause?.code||e.cause?.message||e.message))"
+```
+
+| The check prints                                                                                                       | Cause                                                                                                                                                                        | Fix                                                                                                               |
+| ---------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| `FAILED: EAI_AGAIN` or `FAILED: ENOTFOUND`, and `curl` prints `200`                                                    | Containers can't resolve names. When Docker finds no usable DNS server on the VM, it gives containers Google's `8.8.8.8` / `8.8.4.4`, which corporate firewalls often block. | Give Docker your DNS servers (below).                                                                             |
+| `FAILED: SELF_SIGNED_CERT_IN_CHAIN`, `UNABLE_TO_GET_ISSUER_CERT_LOCALLY` or `UNABLE_TO_VERIFY_LEAF_SIGNATURE`          | A firewall or proxy inspects TLS (for example FortiGate SSL deep inspection) and presents its own certificate.                                                               | Ask for the VM to be exempt from TLS inspection (no certificates to handle), or trust the inspecting CA (§13).    |
+| `FAILED: UND_ERR_CONNECT_TIMEOUT`, `ETIMEDOUT`, `ECONNREFUSED` or `ECONNRESET`, and `curl` fails too (or prints `000`) | The firewall doesn't let the VM reach that host.                                                                                                                             | Allow the hosts in §0, or use the web proxy (§13).                                                                |
+| The same errors, but `curl` prints `200`                                                                               | Only container traffic is affected, often because the network's MTU is below 1500 and large TLS packets are dropped.                                                         | Check `ip link` for the VM's interface MTU. If it is below 1500, set Docker's MTU to that value or lower (below). |
+| `OK 200`                                                                                                               | The host was briefly unreachable.                                                                                                                                            | Run the build again.                                                                                              |
 
 **Give Docker your DNS servers.** First see which servers the VM uses:
 
@@ -938,7 +986,7 @@ the `"dns"` entry to it instead of overwriting it. Then restart Docker:
 sudo systemctl restart docker
 ```
 
-Check which servers containers now get, run the §5 check again, and build:
+Check which servers containers now get, then run the check again:
 
 ```bash
 docker run --rm node:24-bookworm-slim grep nameserver /etc/resolv.conf
@@ -951,4 +999,4 @@ docker run --rm node:24-bookworm-slim grep nameserver /etc/resolv.conf
 sudo systemctl restart docker
 ```
 
-Both settings apply to build containers as well as to the running MAS containers.
+Both settings apply to the running MAS containers and to build containers.

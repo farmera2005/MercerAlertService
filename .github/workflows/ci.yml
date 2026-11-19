@@ -3,6 +3,7 @@ name: CI
 on:
   push:
     branches: [main, 'claude/**']
+    tags: ['v*']
   pull_request:
 
 # Public repository: the workflow only reads the code; pull requests from forks get no secrets.
@@ -75,3 +76,78 @@ jobs:
       - name: Logs on failure
         if: failure()
         run: docker compose --profile dev logs --tail 200
+
+  # Ready-made images on ghcr.io, so an install only pulls: no npm, build CA or build time on the
+  # VM. Published only after the checks and the browser tests passed, and never for pull requests.
+  publish-images:
+    if: github.event_name == 'push'
+    needs: [check, docker-e2e]
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Image tags
+        id: tags
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          owner=$(echo "$GITHUB_REPOSITORY_OWNER" | tr '[:upper:]' '[:lower:]')
+          ref=$(echo "$GITHUB_REF_NAME" | tr '/' '-' | tr -cd '[:alnum:]._-' | cut -c1-120)
+          short=$(git rev-parse --short=7 HEAD)
+          echo "app=$(git describe --always --tags)" >> "$GITHUB_OUTPUT"
+          for target in worker web mock-swis; do
+            image="ghcr.io/$owner/mercer-alert-service-$target"
+            tags="$image:sha-$short,$image:$ref"
+            if [ "$GITHUB_REF_TYPE" = branch ] && [ "$GITHUB_REF_NAME" = "$DEFAULT_BRANCH" ]; then
+              tags="$tags,$image:latest"
+            fi
+            echo "$(echo "$target" | tr - _)=$tags" >> "$GITHUB_OUTPUT"
+          done
+      - name: worker image (also init and migrate)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/Dockerfile
+          target: worker
+          platforms: linux/amd64
+          build-args: APP_VERSION=${{ steps.tags.outputs.app }}
+          labels: org.opencontainers.image.source=https://github.com/${{ github.repository }}
+          tags: ${{ steps.tags.outputs.worker }}
+          push: true
+          cache-from: type=gha,scope=mas
+      - name: web image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/Dockerfile
+          target: web
+          platforms: linux/amd64
+          build-args: APP_VERSION=${{ steps.tags.outputs.app }}
+          labels: org.opencontainers.image.source=https://github.com/${{ github.repository }}
+          tags: ${{ steps.tags.outputs.web }}
+          push: true
+          cache-from: type=gha,scope=mas
+          cache-to: type=gha,scope=mas,mode=max
+      - name: mock-swis image (dev profile only)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/Dockerfile
+          target: mock-swis
+          platforms: linux/amd64
+          build-args: APP_VERSION=${{ steps.tags.outputs.app }}
+          labels: org.opencontainers.image.source=https://github.com/${{ github.repository }}
+          tags: ${{ steps.tags.outputs.mock_swis }}
+          push: true
+          cache-from: type=gha,scope=mas

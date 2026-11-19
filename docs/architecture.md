@@ -699,6 +699,12 @@ sequenceDiagram
   `no-store` and `noindex`, so the token in the path never leaks to tile servers or caches.
   TLS and HSTS belong to the reverse proxy.
 
+- **Images.** CI builds `worker` (also used by `init` and `migrate`), `web` and `mock-swis`,
+  runs the checks and the browser tests against them, then publishes them to
+  `ghcr.io/farmera2005/mercer-alert-service-*`. Tags are `latest` (default branch), the branch
+  name, `sha-xxxxxxx` and `v*` release tags. An install only pulls (`MAS_VERSION` pins a tag),
+  so the VM needs no npm access and no build CA. `docker compose build` still builds from the
+  checkout.
 - **Containers.** They run as `node` with `cap_drop: [ALL]` and `no-new-privileges`. Only
   the one-shot `init` runs as root, to set file ownership on the bootstrap volume. Postgres
   and mock-swis bind to `127.0.0.1` only.

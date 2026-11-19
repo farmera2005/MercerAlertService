@@ -21,6 +21,8 @@ describe('.env.example', () => {
       'WEB_PORT',
       'DB_PORT',
       'APP_VERSION',
+      'MAS_VERSION',
+      'MAS_REGISTRY',
       'BACKUP_TIME',
       'BACKUP_KEEP_DAYS',
       'BACKUP_HOST_DIR',

@@ -54,7 +54,7 @@ over HTTPS, as your own account rather than with `sudo`; no GitHub account or ke
 ```bash
 sudo install -d -o $USER -g $USER /opt/mercer-alert-service
 git clone https://github.com/farmera2005/MercerAlertService.git /opt/mercer-alert-service && cd /opt/mercer-alert-service
-docker compose up -d --build
+docker compose pull && docker compose up -d
 docker compose logs web | grep -i "setup code"
 ```
 
@@ -172,12 +172,15 @@ second, with no restart.
   the web UI, and the UI shows that field as locked. This suits infrastructure-as-code;
   [.env.example](.env.example) lists every variable. Docker secrets work too, as
   `X_FILE=/run/secrets/x`.
-- **Testing first.** To try MAS without Orion, run
-  `docker compose --profile dev up -d --build`. In the wizard, expand _Advanced_, set the base
-  URL to `http://mock-swis:17774`, and use user `mas` / password `mas`.
-- **Building behind a TLS-inspecting proxy.** Use
-  `BUILD_CA_FILE=./secrets/corp-ca.pem docker compose build`. The file must be inside the
-  project directory, and it is only used during the build.
+- **Testing first.** To try MAS without Orion, run `docker compose --profile dev up -d`. In
+  the wizard, expand _Advanced_, set the base URL to `http://mock-swis:17774`, and use user
+  `mas` / password `mas`.
+- **Ready-made images.** CI builds and tests the images, then publishes them to
+  `ghcr.io/farmera2005/mercer-alert-service-*`, so the VM only downloads them. `MAS_VERSION`
+  in `.env` pins a version. To build from the checkout instead (for local changes, or without
+  access to `ghcr.io`), run `docker compose build`. Behind a TLS-inspecting proxy, building
+  also needs `BUILD_CA_FILE=./secrets/corp-ca.pem`. That file must be inside the project
+  directory, and it is only used during the build.
 
 ### Create the read-only Orion account (in Orion)
 
@@ -500,8 +503,8 @@ All of these can be changed in Settings → General.
 ```bash
 cd /opt/mercer-alert-service
 docker compose exec backup /backup.sh now
-git pull
-APP_VERSION=$(git describe --always) docker compose up -d --build
+git pull --ff-only
+docker compose pull && docker compose up -d
 docker compose ps && curl -fsS localhost:3000/api/health
 ```
 

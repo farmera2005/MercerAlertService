@@ -22,7 +22,8 @@ pnpm simulate                # storm scenarios with a readable report (SIMULATOR
 pnpm db:generate             # after editing packages/db/src/schema/* → new SQL migration
 pnpm swis:discover           # list entities/fields/custom properties on a real Orion
 pnpm env:example             # regenerate .env.example after adding or changing a setting
-docker compose up -d         # full stack, no .env needed; add --profile dev for mock-swis
+docker compose up -d         # full stack from the images CI publishes on ghcr.io (no .env needed);
+                             # add --build to run this checkout, --profile dev for mock-swis
 ```
 
 ## Non-negotiable rules
