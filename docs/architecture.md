@@ -774,7 +774,9 @@ sequenceDiagram
   inline scripts, because Next.js needs them; images from any host, for the configurable tile
   server; and `frame-ancestors 'none'`. `/wall/*` also gets `Referrer-Policy: strict-origin`,
   `no-store` and `noindex`, so the token in the path never leaks to tile servers or caches.
-  TLS and HSTS belong to the reverse proxy.
+  Map tiles alone are loaded with `referrerpolicy="strict-origin"`, because OpenStreetMap's tile
+  policy blocks requests without a `Referer`. They send only the dashboard's origin, never a
+  path. TLS and HSTS belong to the reverse proxy.
 
 - **Images.** CI builds `worker` (also used by `init` and `migrate`), `web` and `mock-swis`,
   runs the checks and the browser tests against them, then publishes them to

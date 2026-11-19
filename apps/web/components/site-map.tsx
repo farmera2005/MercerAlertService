@@ -84,7 +84,14 @@ export function SiteMap({
         m.fitBounds(bounds);
       } else {
         leaflet
-          .tileLayer(config.tileUrl, { attribution: config.attribution, maxZoom: 18 })
+          .tileLayer(config.tileUrl, {
+            attribution: config.attribution,
+            maxZoom: 18,
+            // Pages send no Referer elsewhere (Referrer-Policy: same-origin), but OpenStreetMap's
+            // tile policy requires one: tiles send this site's origin only, never a path (the
+            // wall's path holds its kiosk token).
+            referrerPolicy: 'strict-origin',
+          })
           .addTo(m);
         m.setView(OHIO, 8);
       }

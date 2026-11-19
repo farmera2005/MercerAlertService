@@ -555,7 +555,9 @@ All of these can be changed in Settings → General.
   `X-Frame-Options: DENY`, `Referrer-Policy: same-origin` and a restrictive
   `Permissions-Policy`. In production, a Content-Security-Policy keeps scripts, styles and
   connections on the app's own origin and forbids framing. Images may come from any host,
-  because the map tile server is configurable. Put TLS (and HSTS) on your reverse proxy.
+  because the map tile server is configurable. Map tiles send the dashboard's origin (no path)
+  as `Referer`, which OpenStreetMap's tile policy requires. Put TLS (and HSTS) on your reverse
+  proxy.
 - **Containers** run as the unprivileged `node` user with all Linux capabilities dropped and
   `no-new-privileges`. Only the web port is published; the database listens on localhost.
 - **AI.** Claude only adds text and suggestions. IP addresses, MAC addresses and serial numbers

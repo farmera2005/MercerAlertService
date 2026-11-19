@@ -58,6 +58,26 @@ test('overview shows sites and updates live when a site goes down', async ({ pag
   ).toBe(true);
 });
 
+test('map tiles send the dashboard origin as Referer, as OpenStreetMap requires', async ({
+  page,
+}) => {
+  // A transparent 1×1 PNG instead of the real tile (the test must not call OpenStreetMap).
+  const png = Buffer.from(
+    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=',
+    'base64',
+  );
+  const referers: Array<string | undefined> = [];
+  await page.route(/tile\.openstreetmap\.org/, async (route) => {
+    referers.push((await route.request().allHeaders())['referer']);
+    await route.fulfill({ status: 200, contentType: 'image/png', body: png });
+  });
+  await signIn(page);
+  await page.goto('/');
+  await expect.poll(() => referers.length, { timeout: 30_000 }).toBeGreaterThan(0);
+  const origin = `${new URL(page.url()).origin}/`;
+  expect(new Set(referers)).toEqual(new Set([origin]));
+});
+
 test('an incident can be acknowledged and it is audited', async ({ page }) => {
   await signIn(page);
   await page.goto('/incidents?priority=P1');
