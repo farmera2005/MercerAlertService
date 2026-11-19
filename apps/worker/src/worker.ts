@@ -58,6 +58,7 @@ import {
 import { SiteResolver } from './site-resolver';
 import { runWritebackAck, runWritebackNote, runWritebackSiteNotes } from './writeback';
 import { runGeocodeSite } from './geocode';
+import { TunnelSupervisor } from './tunnel';
 import {
   NOTIFY_QUEUE,
   NOTIFY_TICK_SEC,
@@ -156,6 +157,20 @@ export function createWorker(bootstrap: AppConfig, opts: WorkerOptions = {}): Wo
   let boss: PgBoss | null = null;
   let listener: pg.Client | null = null;
   const scheduling = opts.scheduling ?? true;
+  // Remote access: only a scheduling (real) worker runs Cloudflare's connector.
+  const tunnel = scheduling
+    ? new TunnelSupervisor({
+        log: createLogger('tunnel'),
+        report: (s) =>
+          upsertHeartbeat(dbh.db, {
+            component: 'tunnel',
+            status: s.state,
+            details: { ...s },
+            version: cfg.version,
+            host: hostname(),
+          }),
+      })
+    : null;
   const pollTimers: NodeJS.Timeout[] = [];
   const baseTimers: NodeJS.Timeout[] = [];
   const startedAt = now();
@@ -389,6 +404,9 @@ export function createWorker(bootstrap: AppConfig, opts: WorkerOptions = {}): Wo
     await scheduleDigests().catch((e: unknown) =>
       log.error({ err: errorMessage(e) }, 'could not schedule digests'),
     );
+    await tunnel
+      ?.apply(next.tunnel)
+      .catch((e: unknown) => log.error({ err: errorMessage(e) }, 'could not apply the tunnel'));
   }
 
   async function doReload(): Promise<void> {
@@ -726,6 +744,7 @@ export function createWorker(bootstrap: AppConfig, opts: WorkerOptions = {}): Wo
       if (reloadTimer) clearTimeout(reloadTimer);
       await listener?.end().catch(() => {});
       if (boss) await boss.stop({ graceful: true, timeout: 15_000 }).catch(() => {});
+      await tunnel?.stop().catch(() => {});
       await runtime?.client.close();
       await dbh.close();
     },

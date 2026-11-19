@@ -9,6 +9,7 @@ import {
   type MappingConfig,
 } from '@mercer/core';
 import {
+  getHeartbeat,
   getInternalSetting,
   latestSiteNotesWrites,
   listDivisions,
@@ -203,19 +204,66 @@ export async function SitesContent() {
   );
 }
 
+const TUNNEL_TEXT: Record<
+  string,
+  { tone: 'success' | 'info' | 'warning' | 'error'; text: string }
+> = {
+  connected: { tone: 'success', text: 'Connected to Cloudflare.' },
+  connecting: { tone: 'info', text: 'Connecting to Cloudflare…' },
+  starting: { tone: 'info', text: 'Starting the connector…' },
+  restarting: { tone: 'error', text: 'Not connected. The worker keeps retrying.' },
+  not_installed: {
+    tone: 'error',
+    text: 'This worker image has no Cloudflare connector. Update MAS (docker compose pull && docker compose up -d).',
+  },
+  off: { tone: 'info', text: 'Off.' },
+};
+
+/** What the worker's connector reports (component heartbeat "tunnel"). */
+async function TunnelStatus({ enabled }: { enabled: boolean }) {
+  const hb = await getHeartbeat(server().db.db, 'tunnel');
+  if (!enabled && (!hb || hb.status === 'off')) return null;
+  const d = (hb?.details ?? {}) as {
+    connections?: number;
+    lastError?: string | null;
+    tunnelId?: string | null;
+  };
+  const stale = !hb || Date.now() - hb.lastBeatAt.getTime() > 120_000;
+  const s =
+    enabled && stale
+      ? {
+          tone: 'warning' as const,
+          text: 'No report from the worker yet. It starts the connector within a few seconds of saving.',
+        }
+      : (TUNNEL_TEXT[hb?.status ?? 'off'] ?? TUNNEL_TEXT.off!);
+  return (
+    <Alert tone={s.tone} title="Cloudflare Tunnel">
+      <span data-testid="tunnel-status" data-state={stale ? 'unknown' : hb?.status}>
+        {s.text}
+        {!stale && hb?.status === 'connected' && d.connections
+          ? ` ${d.connections} connections to Cloudflare's edge.`
+          : ''}
+        {!stale && d.lastError && hb?.status !== 'connected' ? ` Last error: ${d.lastError}` : ''}
+        {d.tunnelId ? ` Tunnel ${d.tunnelId}.` : ''}
+      </span>
+    </Alert>
+  );
+}
+
 export async function GeneralContent() {
   const state = await getSettingsState();
-  const sections = (['general', 'network', 'polling', 'retention', 'health'] as const).map(
-    (section) => ({
-      section,
-      title: SETTING_SECTIONS[section].title,
-      description: SETTING_SECTIONS[section].description,
-      fields: sectionFields(section, state),
-    }),
-  );
+  const sections = (
+    ['general', 'network', 'tunnel', 'polling', 'retention', 'health'] as const
+  ).map((section) => ({
+    section,
+    title: SETTING_SECTIONS[section].title,
+    description: SETTING_SECTIONS[section].description,
+    fields: sectionFields(section, state),
+  }));
   return (
     <div className="space-y-6">
       <ConfigProblem error={state.configError} />
+      <TunnelStatus enabled={!!state.cfg?.tunnel.enabled} />
       <SettingsForm sections={sections} submitLabel="Save settings" />
     </div>
   );

@@ -637,6 +637,21 @@ worker (`sites.geocode`, `apps/worker/src/geocode.ts`) with a Nominatim-compatib
 - **Bulk.** "Place N sites on the map" queues every site with an address or city and no
   coordinates.
 
+**Remote access (Cloudflare Tunnel, optional).** With `CF_TUNNEL_ENABLED` and a tunnel token
+(a sealed secret), the worker runs Cloudflare's connector, `cloudflared`. It is pinned by digest in
+the worker image and supervised by `apps/worker/src/tunnel.ts`. Cloudflare forwards the tunnel's
+public hostname to `web:3000`, and Cloudflare Access decides who reaches it. MAS sign-in is
+unchanged.
+
+- **The token** goes only in the connector's environment, never on its command line or in logs.
+- **Restarts and status.** The connector restarts with back-off (5 s doubling to 5 min). Its
+  `/ready` endpoint is probed every 15 s, and the state (`starting`, `connecting`, `connected`,
+  `restarting`, `not_installed` or `off`) is stored as the `tunnel` component heartbeat, shown in
+  Settings → General.
+- **Client addresses.** The web app believes `CF-Connecting-IP` and `X-Forwarded-Proto` only on
+  connections whose socket peer is the connector. That is `CF_TUNNEL_CONNECTOR_HOST`, default
+  `worker`, resolved at most once a minute (`tunnelClientIp`, pure).
+
 **Orion write-back (optional).** It needs `SWIS_WRITEBACK_ENABLED` and a separate
 write-capable account. The worker does every write; the web app never calls SWIS.
 

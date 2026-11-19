@@ -40,6 +40,7 @@ the Orion account usually takes longer, so request those first (§0).
 12. [Restore and disaster recovery](#12-restore-and-disaster-recovery)
 13. [If the VM must use a web proxy](#13-if-the-vm-must-use-a-web-proxy)
 14. [Troubleshooting](#14-troubleshooting)
+15. [Remote access with Cloudflare Zero Trust (optional)](#15-remote-access-with-cloudflare-zero-trust-optional)
 
 ---
 
@@ -68,6 +69,7 @@ the Orion account usually takes longer, so request those first (§0).
   | Inbound   | IT admin workstations → VM         | TCP 22           | SSH                                                                                                                                                                                                                                                                                                                                                                                            |
   | Outbound  | VM → Orion server                  | TCP 17774        | SWIS                                                                                                                                                                                                                                                                                                                                                                                           |
   | Outbound  | VM → internet                      | TCP 443          | **At run time:** `login.microsoftonline.com`, the Teams Workflows host (`*.logic.azure.com` / `*.powerplatform.com`), `api.pushover.net`, `api.twilio.com`, `api.anthropic.com` (optional AI), `nominatim.openstreetmap.org` (placing sites from their address).                                                                                                                               |
+  | Outbound  | VM → Cloudflare                    | TCP + UDP 7844   | Only with remote access through a Cloudflare Tunnel (§15).                                                                                                                                                                                                                                                                                                                                     |
   | Outbound  | VM → internet                      | TCP 443          | **To install and upgrade:** Ubuntu mirrors (`archive.ubuntu.com`, `security.ubuntu.com`), `download.docker.com`, GitHub (`github.com`) and its container registry (`ghcr.io`, `pkg-containers.githubusercontent.com`), and Docker Hub for Postgres (`registry-1.docker.io`, `auth.docker.io`, `production.cloudflare.docker.com`). `registry.npmjs.org` only if you build the images yourself. |
   | Outbound  | VM → NAS                           | TCP 445          | Backups (§9)                                                                                                                                                                                                                                                                                                                                                                                   |
 
@@ -401,6 +403,9 @@ already runs under the final HTTPS address.
 ---
 
 ## 6. HTTPS with nginx
+
+To reach MAS from outside the office without opening ports, see §15 (Cloudflare Tunnel). It
+complements HTTPS on the internal address; it doesn't replace it.
 
 **Can this wait?** For a first trial, yes. Skip §6, open `http://netmon.mercer.local:3000` and
 sign in with the local administrator. Docker publishes port 3000 itself, so no firewall rule is
@@ -1005,3 +1010,78 @@ sudo systemctl restart docker
 ```
 
 Both settings apply to the running MAS containers and to build containers.
+
+---
+
+## 15. Remote access with Cloudflare Zero Trust (optional)
+
+A Cloudflare Tunnel makes MAS reachable at a public hostname, such as
+`netmon.mercerlandmark.com`, without opening any inbound port.
+
+- **The connector.** MAS's worker runs Cloudflare's connector (`cloudflared`). It is included in
+  the worker image, so nothing needs installing.
+- **Who gets in.** Cloudflare Access decides who may reach the hostname. People then sign in to
+  MAS as usual (Microsoft or local accounts), and admin rights still come from the Entra admin
+  group.
+
+**1. Create the tunnel.** In the Cloudflare dashboard, open **Zero Trust → Networks → Tunnels →
+Create a tunnel**, choose **Cloudflared** and name it, for example `mas`. The next page shows
+install commands. Copy the **token**: the long string after `--token` in any of them. Don't run
+the commands; MAS runs the connector.
+
+**2. Add the public hostname.** On the tunnel's **Public hostname** tab (or **Published
+application routes**), add:
+
+| Field            | Value                                         |
+| ---------------- | --------------------------------------------- |
+| Hostname         | `netmon` . `mercerlandmark.com`               |
+| Service          | `HTTP` → `web:3000`                           |
+| HTTP Host Header | leave empty (MAS needs the original hostname) |
+
+`web:3000` is the web container's address inside the Docker network, where the connector runs.
+
+**3. Protect it with Cloudflare Access.** Do this before step 4. Without an Access application,
+anyone on the internet can reach the MAS sign-in page.
+
+1. Open **Zero Trust → Access → Applications → Add an application → Self-hosted**.
+2. Enter the same hostname.
+3. Add a policy that allows your IT team, for example your Entra ID group, with Entra ID as the
+   login method.
+
+Wall screens on the office network keep using the internal address. A screen that has to use the
+tunnel needs a second Access application for `netmon.mercerlandmark.com/wall`, with a **Bypass**
+policy limited to that screen's public IP range. The wall link's own token and address range
+still apply.
+
+**4. Turn it on in MAS.** Open **Settings → General → Remote access (Cloudflare Tunnel)**. Tick
+**Run the Cloudflare Tunnel connector**, paste the token and click **Save settings**. Within a
+few seconds the box above the form shows **Connected to Cloudflare**, and the tunnel shows
+_Healthy_ in the Cloudflare dashboard. The token is stored encrypted and never shown again.
+
+**5. Use the public address.**
+
+- **Links.** Set **Settings → General → Dashboard URL** to `https://netmon.mercerlandmark.com`,
+  so links in Teams and SMS work from anywhere.
+- **Microsoft sign-in.** Add
+  `https://netmon.mercerlandmark.com/api/auth/callback/microsoft-entra-id` to the app
+  registration's redirect URIs (Entra admin center → App registrations → MAS → Authentication).
+
+**Network.** The VM needs outbound **TCP and UDP 7844** to Cloudflare
+(`region1.v2.argotunnel.com` and `region2.v2.argotunnel.com`). Cloudflare's _Tunnel with
+firewall_ page has the full list. The connector talks to Cloudflare directly, not through the web
+proxy of §13.
+
+**Client addresses.** Through the tunnel, MAS takes the visitor's address from Cloudflare's
+`CF-Connecting-IP` header for audit rows and wall address ranges. It does this only on
+connections that come from its own connector. Leave **Behind a reverse proxy** off for the
+tunnel; it is only for nginx or IIS in front of MAS.
+
+**If it doesn't connect,** the box in Settings → General shows the connector's last error. The
+full log is here:
+
+```bash
+docker compose logs worker | grep cloudflared
+```
+
+**Turning it off.** Untick the setting and save; the connector stops. To revoke the token, delete
+the tunnel in Cloudflare.

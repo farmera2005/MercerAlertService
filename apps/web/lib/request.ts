@@ -1,6 +1,7 @@
 import 'server-only';
+import { lookup } from 'node:dns/promises';
 import { headers } from 'next/headers';
-import { clientIp } from '@mercer/core';
+import { clientIp, tunnelClientIp } from '@mercer/core';
 import { peerIpFrom } from './peer-ip';
 import { effectiveConfig } from './settings';
 
@@ -12,10 +13,41 @@ export interface RequestMeta {
   origin: string;
 }
 
+let connector: { host: string; ips: string[]; at: number } | null = null;
+
+/** The tunnel connector's addresses (the worker's container), looked up at most once a minute. */
+async function connectorIps(host: string): Promise<string[]> {
+  if (connector?.host === host && Date.now() - connector.at < 60_000) return connector.ips;
+  const ips = await lookup(host, { all: true })
+    .then((r) => r.map((a) => a.address))
+    .catch(() => []);
+  connector = { host, ips, at: Date.now() };
+  return ips;
+}
+
 export async function metaFromHeaders(h: Headers): Promise<RequestMeta> {
   const cfg = await effectiveConfig();
+  // Through the Cloudflare Tunnel: the client address is CF-Connecting-IP, believed only on
+  // connections from the connector itself.
+  const peer = peerIpFrom(h);
+  if (cfg.tunnel.enabled && peer) {
+    const viaTunnel = tunnelClientIp({
+      peer,
+      connectorIps: await connectorIps(cfg.tunnel.connectorHost),
+      cfConnectingIp: h.get('cf-connecting-ip'),
+    });
+    if (viaTunnel) {
+      const proto = h.get('x-forwarded-proto') === 'http' ? 'http' : 'https';
+      return {
+        ip: viaTunnel,
+        userAgent: h.get('user-agent'),
+        https: proto === 'https',
+        origin: `${proto}://${h.get('host') ?? 'localhost:3000'}`,
+      };
+    }
+  }
   const ip = clientIp({
-    peer: peerIpFrom(h),
+    peer,
     forwardedFor: h.get('x-forwarded-for'),
     trustProxy: cfg.web.trustProxy,
     hops: cfg.web.trustProxyHops,

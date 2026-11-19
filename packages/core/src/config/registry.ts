@@ -73,6 +73,11 @@ export const SETTING_SECTIONS = {
     description:
       'Only needed when MAS sits behind a reverse proxy (nginx, IIS, a load balancer). Client addresses are used for audit rows and wall-display IP restrictions.',
   },
+  tunnel: {
+    title: 'Remote access (Cloudflare Tunnel)',
+    description:
+      'Reach MAS from outside the network through a Cloudflare Tunnel: no inbound firewall ports. The worker runs Cloudflare’s connector with the token below. Protect the public hostname with a Cloudflare Access application.',
+  },
   map: {
     title: 'Map',
     description:
@@ -628,6 +633,30 @@ export const SETTINGS: readonly SettingDef[] = [
     min: 1,
     max: 5,
     advanced: true,
+  }),
+
+  // Cloudflare Tunnel
+  s({
+    key: 'CF_TUNNEL_ENABLED',
+    section: 'tunnel',
+    label: 'Run the Cloudflare Tunnel connector',
+    kind: 'bool',
+  }),
+  s({
+    key: 'CF_TUNNEL_TOKEN',
+    section: 'tunnel',
+    label: 'Tunnel token',
+    kind: 'secret',
+    help: 'Cloudflare Zero Trust → Networks → Tunnels → your tunnel: the long string after --token in the install command.',
+  }),
+  s({
+    key: 'CF_TUNNEL_CONNECTOR_HOST',
+    section: 'tunnel',
+    label: 'Connector host',
+    kind: 'text',
+    advanced: true,
+    placeholder: 'worker',
+    help: 'The Docker service that runs the connector. Only its connections may carry Cloudflare’s client address.',
   }),
 
   // map

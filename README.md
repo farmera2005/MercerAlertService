@@ -146,6 +146,15 @@ MAS sees it), give it an expiry, and **Rotate** or **Revoke** it at any time. Th
 between open incidents, the sites and the map with large text, and never shows buttons, links
 or IP addresses.
 
+### Remote access (Cloudflare Zero Trust)
+
+To reach MAS from outside the office without opening a port, create a Cloudflare Tunnel whose
+public hostname points at `web:3000`. Protect the hostname with a Cloudflare Access application,
+then paste the tunnel's token in **Settings → General → Remote access**. The worker runs
+Cloudflare's connector (`cloudflared`, included in the image) and shows whether it is connected.
+People still sign in to MAS as usual. The steps are in
+[install guide §15](docs/install-ubuntu.md#15-remote-access-with-cloudflare-zero-trust-optional).
+
 ### The map
 
 The overview and wall map is a live OpenStreetMap map: no image to prepare, no key. To put a site

@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { parseTunnelToken } from '../tunnel';
 import { isGuid, parseEmailList } from '../auth/entra';
 import { parseQuietHours } from '../notify/quiet';
 import { resolveFileEnv, SECRET_ENV_PREFIXES } from './file-env';
@@ -87,6 +88,13 @@ export const envSchema = z.object({
   /** Believe X-Forwarded-For (from this many proxies, counted from the right). */
   TRUST_PROXY: bool(false),
   TRUST_PROXY_HOPS: int(1, 1),
+
+  // --- Remote access (Cloudflare Tunnel) ---
+  /** The worker runs Cloudflare's connector (cloudflared) with the token below. */
+  CF_TUNNEL_ENABLED: bool(false),
+  CF_TUNNEL_TOKEN: str(''),
+  /** The Compose service running the connector: only its connections may carry CF-Connecting-IP. */
+  CF_TUNNEL_CONNECTOR_HOST: str('worker'),
 
   // --- Sign-in (Microsoft Entra ID) ---
   ENTRA_TENANT_ID: str(''),
@@ -279,6 +287,14 @@ export interface AppConfig {
       adminGroupId: string;
       bootstrapAdminEmails: string[];
     } | null;
+  };
+  /** Remote access through a Cloudflare Tunnel. */
+  tunnel: {
+    enabled: boolean;
+    /** Secret; only the worker's connector uses it. */
+    token: string | null;
+    tunnelId: string | null;
+    connectorHost: string;
   };
   map: {
     mode: 'tiles' | 'image';
@@ -476,6 +492,26 @@ export function loadConfig(
     err.issues = [{ key: 'MAP_TILE_URL', message: 'an http(s) URL with {z}, {x} and {y}' }];
     throw err;
   }
+  if (e.CF_TUNNEL_TOKEN.trim() && !parseTunnelToken(e.CF_TUNNEL_TOKEN)) {
+    const err = new ConfigError('CF_TUNNEL_TOKEN is not a Cloudflare tunnel token');
+    err.issues = [
+      {
+        key: 'CF_TUNNEL_TOKEN',
+        message: 'not a tunnel token: copy the long string after --token in Cloudflare',
+      },
+    ];
+    throw err;
+  }
+  if (e.CF_TUNNEL_ENABLED && !e.CF_TUNNEL_TOKEN.trim()) {
+    const err = new ConfigError('CF_TUNNEL_TOKEN is required when the tunnel is on');
+    err.issues = [{ key: 'CF_TUNNEL_TOKEN', message: 'required when the tunnel is on' }];
+    throw err;
+  }
+  if (!/^[A-Za-z0-9.-]{1,253}$/.test(e.CF_TUNNEL_CONNECTOR_HOST.trim())) {
+    const err = new ConfigError('CF_TUNNEL_CONNECTOR_HOST must be a host name');
+    err.issues = [{ key: 'CF_TUNNEL_CONNECTOR_HOST', message: 'a host name, e.g. worker' }];
+    throw err;
+  }
   if (e.MAP_ADDRESS_LOOKUP && !/^https?:\/\/[^\s/]+/.test(e.MAP_GEOCODER_URL)) {
     const err = new ConfigError('MAP_GEOCODER_URL must be an http(s) URL');
     err.issues = [{ key: 'MAP_GEOCODER_URL', message: 'an http(s) URL' }];
@@ -603,6 +639,12 @@ export function loadConfig(
             bootstrapAdminEmails: parseEmailList(e.BOOTSTRAP_ADMIN_EMAILS),
           }
         : null,
+    },
+    tunnel: {
+      enabled: e.CF_TUNNEL_ENABLED,
+      token: e.CF_TUNNEL_TOKEN.trim() || null,
+      tunnelId: parseTunnelToken(e.CF_TUNNEL_TOKEN)?.tunnelId ?? null,
+      connectorHost: e.CF_TUNNEL_CONNECTOR_HOST.trim(),
     },
     map: {
       mode: e.MAP_MODE,

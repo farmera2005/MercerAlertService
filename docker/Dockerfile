@@ -42,6 +42,10 @@ FROM node:${NODE_VERSION}-bookworm-slim AS worker
 ARG APP_VERSION=dev
 ENV NODE_ENV=production APP_VERSION=${APP_VERSION} MIGRATIONS_DIR=/app/migrations
 WORKDIR /app
+# Cloudflare's tunnel connector (a static binary), run by the worker only when remote access is on
+# (Settings → General → Remote access). Pinned by digest; update it like any other dependency.
+COPY --from=cloudflare/cloudflared:2026.10.7@sha256:4955524aeaa379e154023d5a027c250f7b35041a2e7e950cf13f144bc9b9c5ba \
+     --chown=root:root /usr/local/bin/cloudflared /usr/local/bin/cloudflared
 COPY --from=build /out/worker/node_modules ./node_modules
 COPY --from=build /repo/apps/worker/package.json ./package.json
 COPY --from=build /repo/apps/worker/dist ./dist
