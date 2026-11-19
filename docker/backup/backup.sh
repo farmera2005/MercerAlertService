@@ -2,6 +2,8 @@
 # Nightly pg_dump sidecar. Custom-format dumps (restore with pg_restore), rotated after
 # BACKUP_KEEP_DAYS. Run an immediate backup with:  docker compose exec backup /backup.sh now
 set -eu
+# Dumps hold the whole database (secrets are sealed, but audit and contact data are not): owner-only.
+umask 077
 : "${BACKUP_TIME:=02:30}"        # local time (TZ) to run daily
 : "${BACKUP_KEEP_DAYS:=14}"
 : "${BACKUP_DIR:=/backups}"

@@ -9,6 +9,9 @@ keeps polling the devices. MercerAlertService (MAS) does the following:
 3. Posts incidents to **Microsoft Teams**, and pages on-call by **SMS or Pushover** for urgent ones.
 4. Serves a live **dashboard** and a **NOC wall display**.
 
+**Installing on Ubuntu:** [step-by-step guide](docs/install-ubuntu.md) (Docker, HTTPS with nginx,
+firewall, NAS backups, upgrades, recovery).
+
 Design docs: [architecture](docs/architecture.md) · [database schema](docs/schema.md) ·
 [SWQL queries](docs/swql-queries.md) · [open questions](docs/open-questions.md) ·
 [project conventions](CLAUDE.md)
@@ -28,6 +31,11 @@ Design docs: [architecture](docs/architecture.md) · [database schema](docs/sche
 ---
 
 ## Install on the Linux VM (no config files)
+
+This is the short version. For a production VM, follow the
+**[Ubuntu install guide](docs/install-ubuntu.md)**. It also covers installing Docker, HTTPS
+through nginx with the internal certificate (needed for Microsoft sign-in), the firewall, a web
+proxy, backups to a NAS, upgrades and disaster recovery.
 
 Requirements:
 
@@ -386,8 +394,8 @@ itself, but `/api/health` returns 503 for it, so the Orion HTTP monitor above (o
 
 ### Logs
 
-Logs are structured JSON (pino). Use `docker compose logs -f worker | npx pino-pretty` for
-readable output. Secrets and authorization headers are redacted.
+Logs are structured JSON (pino). See [Day-to-day commands](docs/install-ubuntu.md#10-day-to-day-commands)
+for a readable view with `jq`. Secrets and authorization headers are redacted.
 
 ### Backups and restore
 
@@ -395,12 +403,30 @@ The `backup` sidecar runs `pg_dump -Fc` daily at `BACKUP_TIME` (local time) into
 `BACKUP_HOST_DIR` (default `./backups`) and keeps `BACKUP_KEEP_DAYS` days of dumps. Copy
 that directory off the VM, for example to a NAS (open question D6).
 
+Take an immediate backup:
+
 ```bash
-docker compose exec backup /backup.sh now           # immediate backup
-# restore (stops writers first)
+docker compose exec backup /backup.sh now
+```
+
+To restore, stop the writers, recreate the database, restore into it, and start again. `up -d`
+also applies migrations if the dump is from an older version. Don't restore over the live
+database with `--clean`: the job queue's partitioned tables make that fail.
+
+```bash
 docker compose stop worker web
-docker compose exec -T db pg_restore -U mas -d mas --clean --if-exists < backups/mas-YYYYMMDDTHHMMSSZ.dump
-docker compose start worker web
+```
+
+```bash
+docker compose exec -T db dropdb -U mas --force mas && docker compose exec -T db createdb -U mas mas
+```
+
+```bash
+docker compose exec -T db pg_restore -U mas -d mas --no-owner --exit-on-error < backups/mas-YYYYMMDDTHHMMSSZ.dump
+```
+
+```bash
+docker compose up -d
 ```
 
 **Also keep a copy of the master key.** Secrets saved in the web UI (the Orion password,
@@ -476,7 +502,8 @@ docker compose ps && curl -fsS localhost:3000/api/health
 
 Migrations run automatically through the `migrate` service before `worker` and `web` start.
 Migrations only move forward. To roll back, check out the previous version and restore the
-backup you took before the upgrade.
+backup you took before the upgrade. The [install guide](docs/install-ubuntu.md#11-upgrades)
+covers upgrading to a tag and reclaiming disk space afterwards.
 
 ---
 

@@ -23,6 +23,7 @@
     "dev:worker": "pnpm --filter @mercer/worker run dev",
     "dev:web": "pnpm --filter @mercer/web run dev",
     "swis:discover": "tsx scripts/swis-discover.ts",
+    "env:example": "tsx scripts/gen-env-example.ts",
     "swis:record": "tsx scripts/swis-record.ts",
     "test:e2e": "pnpm --filter @mercer/web test:e2e",
     "simulate": "pnpm --filter @mercer/simulator simulate"
