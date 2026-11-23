@@ -78,16 +78,47 @@ describe('TunnelSupervisor', () => {
     const call = JSON.parse(calls().trim().split('\n')[0]!) as {
       args: string[];
       hasToken: boolean;
+      json: boolean;
     };
     expect(call.hasToken).toBe(true);
+    expect(call.json).toBe(true);
     expect(call.args.join(' ')).not.toContain('token');
     expect(reports.map((r) => r.state)).toContain('starting');
+    await until(() => sup!.snapshot.routes !== null);
+    expect(sup!.snapshot).toMatchObject({
+      routes: [
+        { hostname: 'mas.example.net', path: null, service: 'http://web:3000' },
+        { hostname: null, path: null, service: 'http_status:404' },
+      ],
+      routeProblems: [],
+      originError: null,
+    });
 
     // Unchanged settings leave it running; turning it off stops it.
     await sup!.apply(tunnel('eyJhIjoiMSJ9-token'));
     expect(calls().trim().split('\n')).toHaveLength(1);
     await sup!.apply(tunnel('eyJhIjoiMSJ9-token', false));
     expect(sup!.snapshot.state).toBe('off');
+  });
+
+  it('says when a route points at localhost, where nothing answers', async () => {
+    const { reports } = await make();
+    await sup!.apply(tunnel('loopback-token'));
+    await until(() => sup!.snapshot.originError !== null);
+    const s = sup!.snapshot;
+    expect(s.routeProblems).toHaveLength(1);
+    expect(s.routeProblems[0]).toMatch(
+      /^mas\.example\.net sends requests to http:\/\/127\.0\.0\.1:3000/,
+    );
+    expect(s.routeProblems[0]).toMatch(/URL to web:3000/);
+    expect(s.originError).toMatchObject({
+      service: 'http://127.0.0.1:3000',
+      error: expect.stringMatching(/connection refused/),
+    });
+    // A failed request is not a broken connection to Cloudflare.
+    expect(s.lastError).toBeNull();
+    // The report carries it to Settings.
+    expect(reports.at(-1)!.originError).not.toBeNull();
   });
 
   it('restarts a connector that exits, and keeps its error', async () => {

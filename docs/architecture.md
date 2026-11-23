@@ -679,6 +679,12 @@ unchanged.
   `/ready` endpoint is probed every 15 s, and the state (`starting`, `connecting`, `connected`,
   `restarting`, `not_installed` or `off`) is stored as the `tunnel` component heartbeat, shown in
   Settings → General.
+- **Routes.** The connector logs JSON (`TUNNEL_LOG_OUTPUT=json`), including each route list
+  Cloudflare pushes ("Updated to new configuration") and each request it couldn't pass on
+  ("Unable to reach the origin service"). `tunnelLogEvent` reads them and `tunnelRouteProblems`
+  flags routes that can't reach MAS: loopback (the worker itself), HTTPS or another port on
+  `web`, non-HTTP services, or no public hostname. Both, and the last failed request (reported at
+  most every 30 s), are in the heartbeat; Settings shows them in a red box with the fix.
 - **Client addresses.** The web app believes `CF-Connecting-IP` and `X-Forwarded-Proto` only on
   connections whose socket peer is the connector. That is `CF_TUNNEL_CONNECTOR_HOST`, default
   `worker`, resolved at most once a minute (`tunnelClientIp`, pure).

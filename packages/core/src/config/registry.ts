@@ -76,7 +76,7 @@ export const SETTING_SECTIONS = {
   tunnel: {
     title: 'Remote access (Cloudflare Tunnel)',
     description:
-      'Reach MAS from outside the network through a Cloudflare Tunnel: no inbound firewall ports. The worker runs Cloudflare’s connector with the token below. Protect the public hostname with a Cloudflare Access application.',
+      'Reach MAS from outside the network through a Cloudflare Tunnel: no inbound firewall ports. The worker runs Cloudflare’s connector with the token below. In Cloudflare, give the tunnel’s public hostname the service type HTTP and the URL web:3000 (not localhost: the connector runs in the worker container). Protect the hostname with a Cloudflare Access application.',
   },
   map: {
     title: 'Map',

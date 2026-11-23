@@ -6,7 +6,10 @@ import {
   nodeSiteGroups,
   normalizeKey,
   siteGroupMode,
+  TUNNEL_WEB_ORIGIN,
+  tunnelOriginHint,
   type MappingConfig,
+  type TunnelRoute,
 } from '@mercer/core';
 import {
   getHeartbeat,
@@ -219,15 +222,28 @@ const TUNNEL_TEXT: Record<
   off: { tone: 'info', text: 'Off.' },
 };
 
+interface TunnelDetails {
+  connections?: number;
+  lastError?: string | null;
+  tunnelId?: string | null;
+  routes?: TunnelRoute[] | null;
+  routeProblems?: string[];
+  originError?: { service: string | null; error: string; at: string } | null;
+}
+
+/** A failed request older than this no longer says much about the routes. */
+const ORIGIN_ERROR_SHOWN_MS = 30 * 60_000;
+
+function minutesAgo(iso: string): string {
+  const min = Math.round((Date.now() - Date.parse(iso)) / 60_000);
+  return min < 1 ? 'just now' : `${min} min ago`;
+}
+
 /** What the worker's connector reports (component heartbeat "tunnel"). */
 async function TunnelStatus({ enabled }: { enabled: boolean }) {
   const hb = await getHeartbeat(server().db.db, 'tunnel');
   if (!enabled && (!hb || hb.status === 'off')) return null;
-  const d = (hb?.details ?? {}) as {
-    connections?: number;
-    lastError?: string | null;
-    tunnelId?: string | null;
-  };
+  const d = (hb?.details ?? {}) as TunnelDetails;
   const stale = !hb || Date.now() - hb.lastBeatAt.getTime() > 120_000;
   const s =
     enabled && stale
@@ -236,17 +252,52 @@ async function TunnelStatus({ enabled }: { enabled: boolean }) {
           text: 'No report from the worker yet. It starts the connector within a few seconds of saving.',
         }
       : (TUNNEL_TEXT[hb?.status ?? 'off'] ?? TUNNEL_TEXT.off!);
+  const routes = !stale && Array.isArray(d.routes) ? d.routes.filter((r) => r.hostname) : [];
+  const problems = !stale && Array.isArray(d.routeProblems) ? d.routeProblems : [];
+  const origin =
+    !stale && d.originError && Date.now() - Date.parse(d.originError.at) < ORIGIN_ERROR_SHOWN_MS
+      ? d.originError
+      : null;
   return (
-    <Alert tone={s.tone} title="Cloudflare Tunnel">
-      <span data-testid="tunnel-status" data-state={stale ? 'unknown' : hb?.status}>
-        {s.text}
-        {!stale && hb?.status === 'connected' && d.connections
-          ? ` ${d.connections} connections to Cloudflare's edge.`
-          : ''}
-        {!stale && d.lastError && hb?.status !== 'connected' ? ` Last error: ${d.lastError}` : ''}
-        {d.tunnelId ? ` Tunnel ${d.tunnelId}.` : ''}
-      </span>
-    </Alert>
+    <>
+      <Alert tone={s.tone} title="Cloudflare Tunnel">
+        <span data-testid="tunnel-status" data-state={stale ? 'unknown' : hb?.status}>
+          {s.text}
+          {!stale && hb?.status === 'connected' && d.connections
+            ? ` ${d.connections} connections to Cloudflare's edge.`
+            : ''}
+          {!stale && d.lastError && hb?.status !== 'connected' ? ` Last error: ${d.lastError}` : ''}
+          {d.tunnelId ? ` Tunnel ${d.tunnelId}.` : ''}
+        </span>
+        {routes.length > 0 && (
+          <span className="mt-1 block" data-testid="tunnel-routes">
+            Routes from Cloudflare:{' '}
+            {routes.map((r) => `${r.hostname}${r.path ?? ''} → ${r.service}`).join(', ')}.
+          </span>
+        )}
+      </Alert>
+      {(problems.length > 0 || origin) && (
+        <Alert tone="error" title="The public hostname doesn’t reach MAS">
+          <div data-testid="tunnel-route-problem" className="space-y-1">
+            {problems.map((p) => (
+              <p key={p}>{p}</p>
+            ))}
+            {origin && (
+              <p>
+                Last failed request ({minutesAgo(origin.at)}): {origin.error}
+                {problems.length ? '' : ` ${tunnelOriginHint(origin.service)}`}
+              </p>
+            )}
+            <p>
+              Change it in Cloudflare Zero Trust → Networks → Tunnels → your tunnel → Published
+              application routes (or Public hostname): service type <strong>HTTP</strong>, URL{' '}
+              <code>{TUNNEL_WEB_ORIGIN}</code>. The connector gets the change within seconds, and
+              this box updates when you reload the page.
+            </p>
+          </div>
+        </Alert>
+      )}
+    </>
   );
 }
 

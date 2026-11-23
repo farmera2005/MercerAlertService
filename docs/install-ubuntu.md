@@ -1044,6 +1044,9 @@ application routes**), add:
 | HTTP Host Header | leave empty (MAS needs the original hostname) |
 
 `web:3000` is the web container's address inside the Docker network, where the connector runs.
+Don't use `localhost:3000` or `127.0.0.1:3000`: inside the worker container that is the worker
+itself, so Cloudflare reports _Unable to reach the origin service … connection refused_. MAS
+reads the routes Cloudflare sends the connector and says so in Settings → General.
 
 **3. Protect it with Cloudflare Access.** Do this before step 4. Without an Access application,
 anyone on the internet can reach the MAS sign-in page.
@@ -1081,8 +1084,9 @@ proxy of §13.
 connections that come from its own connector. Leave **Behind a reverse proxy** off for the
 tunnel; it is only for nginx or IIS in front of MAS.
 
-**If it doesn't connect,** the box in Settings → General shows the connector's last error. The
-full log is here:
+**If it doesn't connect,** the box in Settings → General shows the connector's last error. It
+also lists the routes Cloudflare sent, and a red box appears when one can't reach MAS or a
+request failed, with what to change. The full log is here:
 
 ```bash
 docker compose logs worker | grep cloudflared

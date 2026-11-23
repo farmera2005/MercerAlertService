@@ -2,19 +2,25 @@
  * Runs Cloudflare's tunnel connector (cloudflared) while the tunnel is on in Settings. The token
  * reaches cloudflared only through its environment (TUNNEL_TOKEN), never the command line or the
  * logs. The connector is restarted with back-off when it exits, and its /ready endpoint says
- * whether Cloudflare's edge is connected; the status is reported for Settings → General.
+ * whether Cloudflare's edge is connected; the status is reported for Settings → General. The
+ * connector logs the routes Cloudflare pushes and each request it couldn't pass on, so the status
+ * also says when a route can't reach MAS (localhost:3000 is the worker itself, not the web app).
  */
 import { spawn, type ChildProcess } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { createInterface } from 'node:readline';
 import {
+  CLOUDFLARED_ENV,
   TUNNEL_METRICS_ADDR,
   cloudflaredArgs,
   errorMessage,
   parseCloudflaredLine,
   parseTunnelReady,
+  tunnelLogEvent,
+  tunnelRouteProblems,
   type AppConfig,
   type Logger,
+  type TunnelRoute,
 } from '@mercer/core';
 
 export type TunnelState =
@@ -29,6 +35,12 @@ export interface TunnelSnapshot {
   /** When the current state began. */
   since: string;
   restarts: number;
+  /** The routes Cloudflare last sent the connector; null until it has. */
+  routes: TunnelRoute[] | null;
+  /** Why those routes can't reach MAS (tunnelRouteProblems). */
+  routeProblems: string[];
+  /** The last request the connector couldn't pass on, since the routes last changed. */
+  originError: { service: string | null; error: string; at: string } | null;
 }
 
 export interface TunnelSupervisorOptions {
@@ -45,6 +57,8 @@ export interface TunnelSupervisorOptions {
 }
 
 const MAX_BACKOFF_MS = 5 * 60_000;
+/** Failing requests can come many a second: report the same failure at most this often. */
+const ORIGIN_REPORT_MS = 30_000;
 
 export class TunnelSupervisor {
   private readonly binary: string;
@@ -61,7 +75,11 @@ export class TunnelSupervisor {
     lastError: null,
     since: new Date().toISOString(),
     restarts: 0,
+    routes: null,
+    routeProblems: [],
+    originError: null,
   };
+  private originReportedAt = 0;
   private restartTimer: NodeJS.Timeout | null = null;
   private probeTimer: NodeJS.Timeout | null = null;
 
@@ -73,7 +91,7 @@ export class TunnelSupervisor {
   }
 
   get snapshot(): TunnelSnapshot {
-    return { ...this.snap };
+    return structuredClone(this.snap);
   }
 
   /** Start, restart (new token) or stop the connector to match the settings. */
@@ -88,6 +106,10 @@ export class TunnelSupervisor {
     this.snap.restarts = 0;
     this.snap.lastError = null;
     this.snap.connections = 0;
+    this.snap.routes = null;
+    this.snap.routeProblems = [];
+    this.snap.originError = null;
+    this.originReportedAt = 0;
     if (!want) {
       await this.set('off');
       this.o.log.info('Cloudflare Tunnel connector off');
@@ -135,8 +157,8 @@ export class TunnelSupervisor {
           PATH: process.env.PATH ?? '/usr/local/bin:/usr/bin:/bin',
           HOME: process.env.HOME ?? '/tmp',
           ...this.o.env,
+          ...CLOUDFLARED_ENV,
           TUNNEL_TOKEN: this.token!,
-          NO_AUTOUPDATE: 'true',
         },
         stdio: ['ignore', 'pipe', 'pipe'],
       });
@@ -147,11 +169,7 @@ export class TunnelSupervisor {
     this.o.log.info({ tunnelId: this.snap.tunnelId }, 'Cloudflare Tunnel connector starting');
     for (const stream of [child.stdout, child.stderr]) {
       if (!stream) continue;
-      createInterface({ input: stream }).on('line', (line) => {
-        const { level, message } = parseCloudflaredLine(line);
-        this.o.log[level]({ connector: 'cloudflared' }, message);
-        if (level === 'error') this.snap.lastError = message;
-      });
+      createInterface({ input: stream }).on('line', (line) => this.onLine(line));
     }
     child.on('error', (err: NodeJS.ErrnoException) => {
       if (this.child !== child) return;
@@ -167,6 +185,43 @@ export class TunnelSupervisor {
       this.child = null;
       void this.failed(this.snap.lastError ?? `cloudflared exited (${code ?? signal})`);
     });
+  }
+
+  private onLine(line: string): void {
+    const parsed = parseCloudflaredLine(line);
+    const event = tunnelLogEvent(parsed);
+    if (event?.kind === 'routes') {
+      this.snap.routes = event.routes;
+      this.snap.routeProblems = tunnelRouteProblems(event.routes);
+      // The routes changed, so an earlier failure may be fixed: wait for the next one.
+      this.snap.originError = null;
+      const routes = event.routes.map((r) => `${r.hostname ?? '*'}${r.path ?? ''} → ${r.service}`);
+      if (this.snap.routeProblems.length)
+        this.o.log.warn(
+          { connector: 'cloudflared', routes, problems: this.snap.routeProblems },
+          'the tunnel routes do not reach MAS',
+        );
+      else this.o.log.info({ connector: 'cloudflared', routes }, 'tunnel routes from Cloudflare');
+      void this.set(this.snap.state);
+      return;
+    }
+    this.o.log[parsed.level]({ connector: 'cloudflared' }, parsed.message);
+    if (event?.kind === 'origin_error') {
+      // A request failed, not the connection to Cloudflare: kept apart from lastError.
+      const first = this.snap.originError?.service !== event.service;
+      const now = Date.now();
+      this.snap.originError = {
+        service: event.service,
+        error: event.error,
+        at: new Date(now).toISOString(),
+      };
+      if (first || now - this.originReportedAt >= ORIGIN_REPORT_MS) {
+        this.originReportedAt = now;
+        void this.set(this.snap.state);
+      }
+      return;
+    }
+    if (parsed.level === 'error') this.snap.lastError = parsed.message;
   }
 
   private async failed(why: string): Promise<void> {
