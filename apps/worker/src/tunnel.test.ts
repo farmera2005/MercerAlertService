@@ -93,10 +93,11 @@ describe('TunnelSupervisor', () => {
   it('restarts a connector that exits, and keeps its error', async () => {
     const { calls } = await make();
     await sup!.apply(tunnel('crash-token'));
-    await until(() => calls().trim().split('\n').length >= 3);
-    expect(sup!.snapshot.state).toBe('restarting');
+    // Wait for the state itself: right after a start is logged, the connector may not have
+    // exited yet (state "starting"), so counting starts alone races on fast machines.
+    await until(() => sup!.snapshot.state === 'restarting' && sup!.snapshot.restarts >= 2, 10_000);
+    expect(calls().trim().split('\n').length).toBeGreaterThanOrEqual(2);
     expect(sup!.snapshot.lastError).toMatch(/token is not valid/);
-    expect(sup!.snapshot.restarts).toBeGreaterThanOrEqual(2);
   });
 
   it('says when cloudflared is missing', async () => {
