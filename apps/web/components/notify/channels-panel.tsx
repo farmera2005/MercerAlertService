@@ -48,7 +48,7 @@ function ChannelFields({ c, errors }: { c?: ChannelView; errors: Record<string, 
           help={
             c?.configured
               ? 'A URL is saved (it is never shown again). Paste a new one to replace it.'
-              : 'From the Teams Workflows trigger "When a Teams webhook request is received".'
+              : 'The URL the Teams workflow “Send webhook alerts to a channel” shows (…environment.api.powerplatform.com/…). Steps below.'
           }
         >
           <Input
@@ -56,7 +56,9 @@ function ChannelFields({ c, errors }: { c?: ChannelView; errors: Record<string, 
             name="webhookUrl"
             type="password"
             autoComplete="off"
-            placeholder={c?.configured ? '•••••••• (saved)' : 'https://…logic.azure.com/…'}
+            placeholder={
+              c?.configured ? '•••••••• (saved)' : 'https://…environment.api.powerplatform.com/…'
+            }
           />
         </FieldShell>
       </div>

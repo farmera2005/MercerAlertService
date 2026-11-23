@@ -528,15 +528,24 @@ a corrected number takes effect for queued pages. Escalations are rows with a du
 the same pass. One pass (`notify.run`) runs after every correlation cycle, whenever the
 dashboard changes an incident (`pg_notify`), and every 15 s.
 
-**Providers** (`packages/notify`, behind a `Notifier` interface): Teams Workflows webhooks
-(Adaptive Card 1.4 posted to "When a Teams webhook request is received"; not the retired
-Office 365 connectors), Twilio SMS (number or Messaging Service), Pushover (high priority for
-pages). Buttons are `Action.OpenUrl` links to the dashboard (`?do=ack`, `?do=snooze`), which ask
-for confirmation: a link preview cannot ack anything. Workflows cannot edit a posted card, so
-updates are follow-up cards; the interface has `updatesInPlace` / `inCardActions` capabilities
-for a phase-2 Teams bot with `Action.Execute`. SMS stays under 300 characters with a `/i/<code>`
-short link. Webhook URLs are sealed with the master key, never returned to the browser, never
-logged (provider errors are scrubbed of URLs) and audited only as `[set]`.
+**Providers** (`packages/notify`, behind a `Notifier` interface):
+
+- **Teams Workflows webhooks.** An Adaptive Card 1.4 in an `attachments` array is posted to a
+  workflow made from the Teams template _Send webhook alerts to a channel_. Its trigger is
+  "When a Teams webhook request is received", with "Who can trigger the flow?" set to Anyone.
+  URLs are on `*.environment.api.powerplatform.com`; `logic.azure.com` URLs stopped working
+  after 30 November 2025, and saving one shows a warning. A failed test send names the likely
+  fix (`teamsFailureHint`). The retired Office 365 connectors are not used.
+- **Twilio SMS** (a number or a Messaging Service). SMS stays under 300 characters, with a
+  `/i/<code>` short link.
+- **Pushover**, at high priority for pages.
+
+Card buttons are `Action.OpenUrl` links to the dashboard (`?do=ack`, `?do=snooze`), which ask for
+confirmation: a link preview cannot ack anything. Workflows cannot edit a posted card, so updates
+are follow-up cards. The interface has `updatesInPlace` / `inCardActions` capabilities for a
+phase-2 Teams bot with `Action.Execute`. Webhook URLs are sealed with the master key, never
+returned to the browser and never logged (provider errors are scrubbed of URLs); the audit log
+records them only as `[set]`.
 
 **MAS alerts on itself** (`maint.selfcheck`, every minute): a Teams channel or provider that has
 failed 3 times in a row, notifications overdue by more than 5 minutes, or more than 5,000
@@ -836,7 +845,7 @@ sequenceDiagram
   are not logged; `ai_calls` records only purpose, model, tokens, time, cost and outcome. The
   API key is a sealed setting like any other secret.
 - **Outbound hosts the VM needs:** Orion `:17774`, `login.microsoftonline.com` (sign-in), `api.anthropic.com`, the Teams Workflows
-  host (`*.logic.azure.com` / `*.powerplatform.com`), `api.twilio.com`, `api.pushover.net`,
+  host (`*.environment.api.powerplatform.com`), `api.twilio.com`, `api.pushover.net`,
   and OSM tiles unless `MAP_MODE=image`.
 
 ## 12. Key decisions

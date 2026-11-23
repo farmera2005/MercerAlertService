@@ -4,3 +4,4 @@ export * from './oncall';
 export * from './messages';
 export * from './dispatch';
 export * from './quiet';
+export * from './teams-help';

@@ -76,20 +76,68 @@ export default async function NotificationSettings() {
         }))}
         submitLabel="Save notification settings"
       />
-      <Card title="Creating a Teams Workflows webhook" description="About two minutes per channel.">
-        <ol className="list-decimal space-y-1.5 pl-5 text-sm text-slate-300">
+      <Card
+        title="Creating a Teams webhook (Workflows)"
+        description="About two minutes per channel, in the Teams app."
+        className="[&_b]:text-slate-100"
+      >
+        <ol
+          className="list-decimal space-y-2 pl-5 text-sm text-slate-300"
+          data-testid="teams-steps"
+        >
           <li>
-            In Teams, open the channel → <b>…</b> → <b>Workflows</b> → “Post to a channel when a
-            webhook request is received”.
+            In Teams, point at the channel’s name in the list on the left (a <b>standard</b>{' '}
+            channel: workflows can’t post to private channels), select <b>⋯ More options</b> →{' '}
+            <b>Workflows</b>. If there is no Workflows entry, open the <b>Workflows</b> app from the
+            Teams apps bar instead and choose <b>Create</b>.
           </li>
-          <li>Name it “MAS”, pick the team and channel, and create it.</li>
           <li>
-            Copy the URL it shows and paste it into the channel above, then click <b>Send test</b>.
+            Search for the template <b>Send webhook alerts to a channel</b> and select it.
+          </li>
+          <li>
+            Name it, e.g. “MAS net-critical”. Make sure the Microsoft Teams connection has a green
+            tick (sign in if asked), then select <b>Next</b>.
+          </li>
+          <li>
+            Choose the <b>Team</b> and <b>Channel</b>, then <b>Add workflow</b> (some versions say{' '}
+            <b>Save</b>).
+          </li>
+          <li>
+            Copy the URL on the confirmation screen. It looks like{' '}
+            <code className="text-slate-200">
+              https://…environment.api.powerplatform.com/powerautomate/…
+            </code>
+            . Paste it into the channel above, save, and click <b>Send test</b>.
           </li>
         </ol>
+        <ul className="mt-4 list-disc space-y-1.5 pl-5 text-xs text-slate-400">
+          <li>
+            <b>Copy the URL again later:</b> Workflows app → the workflow → <b>Edit</b> → expand
+            “When a Teams webhook request is received” → copy the URL.
+          </li>
+          <li>
+            <b>Keep “Who can trigger the flow?” set to Anyone</b> (the template’s setting) in that
+            same step. MAS can’t sign in to Microsoft, so a test failing with HTTP 401 or 403 means
+            it was changed. The URL is the secret: MAS stores it encrypted.
+          </li>
+          <li>
+            <b>Old URLs:</b> addresses on <code>logic.azure.com</code> stopped working after 30
+            November 2025. Copy the workflow’s current URL as above and paste it again.
+          </li>
+          <li>
+            <b>Ownership:</b> a workflow belongs to the person who created it and stops when their
+            account is disabled. Create them with a shared IT account, or add a second owner in
+            Power Automate (make.powerautomate.com → My flows → the workflow → Share).
+          </li>
+          <li>
+            <b>No Workflows app?</b> A Teams administrator must allow it (Teams admin center → Teams
+            apps → Manage apps → Workflows). It uses only standard connectors, so a normal Microsoft
+            365 licence is enough.
+          </li>
+        </ul>
         <p className="mt-3 text-xs text-slate-400">
-          These are Teams Workflows (Power Automate) webhooks, not the retired Office 365
-          connectors. Test sends always go to the chosen channel, even in shadow mode.
+          These replace the Office 365 “Incoming Webhook” connector, which Microsoft retired. Test
+          sends always go to the chosen channel, even in shadow mode.
         </p>
       </Card>
     </div>

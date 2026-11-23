@@ -27,6 +27,7 @@ import {
   type SecretBox,
   type SmsPayload,
   type TeamsPayload,
+  teamsFailureHint,
 } from '@mercer/core';
 import {
   claimNotification,
@@ -534,6 +535,6 @@ export async function runTestSend(
           ? 'This person has no number or Pushover key for that method.'
           : why === 'provider_not_configured'
             ? `${target.kind === 'sms' ? 'Twilio' : 'Pushover'} is not set up yet.`
-            : `Delivery failed: ${why}`,
+            : `Delivery failed: ${why}${target.kind === 'teams' && teamsFailureHint(why) ? `. ${teamsFailureHint(why)}` : ''}`,
   };
 }

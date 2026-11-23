@@ -44,8 +44,7 @@ Requirements:
 - Outbound HTTPS to the hosts listed in [architecture §11](docs/architecture.md#11-security--operations):
   `login.microsoftonline.com` for Microsoft sign-in, `tile.openstreetmap.org` for the map
   (unless you use an offline map image), `nominatim.openstreetmap.org` to place sites from their
-  address, the Teams Workflows host (`*.logic.azure.com` /
-  `*.powerplatform.com`), `api.pushover.net` and `api.twilio.com` for notifications, and
+  address, the Teams Workflows host (`*.environment.api.powerplatform.com`), `api.pushover.net` and `api.twilio.com` for notifications, and
   `api.anthropic.com` for AI summaries and digests (optional).
 
 The code is in the public repository
@@ -288,10 +287,25 @@ MAS starts in **shadow mode**: every message goes to one Teams channel (`#mas-sh
 Run it next to the existing SolarWinds e-mails for 2–4 weeks, then turn shadow mode off in
 Settings → Notifications.
 
-1. **Teams.** For each channel (`net-critical` for P1–P2, `net-alerts` for P3–P4, `mas-shadow`):
-   in Teams, channel **…** → **Workflows** → "Post to a channel when a webhook request is
-   received", name it "MAS", create it, copy the URL. Paste it in Settings → Notifications →
-   the channel → Edit, then **Send test**. The URL is stored encrypted and never shown again.
+1. **Teams.** Create one webhook per channel: `net-critical` (P1–P2), `net-alerts` (P3–P4) and
+   `mas-shadow`. Do it in the Teams app with **Workflows**, about two minutes each:
+   1. Point at the channel's name (a _standard_ channel: workflows can't post to private ones)
+      and select **⋯ More options → Workflows**. Without that entry, open the **Workflows** app
+      from the apps bar and choose **Create**.
+   2. Pick the template **Send webhook alerts to a channel**, name it (e.g. "MAS net-critical"),
+      check that the Teams connection has a green tick, and select **Next**.
+   3. Choose the team and channel, then **Add workflow** (or **Save**).
+   4. Copy the URL it shows (`https://…environment.api.powerplatform.com/powerautomate/…`).
+      Paste it in Settings → Notifications → the channel → Edit, save, and click **Send test**.
+      The URL is stored encrypted and never shown again.
+
+   Keep the workflow's **Who can trigger the flow?** set to **Anyone**: MAS can't sign in to
+   Microsoft, so anything else fails with HTTP 401. A workflow stops when its creator's account
+   is disabled: use a shared IT account, or add a second owner in Power Automate. URLs on
+   `logic.azure.com` stopped working after 30 November 2025. To copy a current one, open the
+   Workflows app → the workflow → **Edit** → expand the first step. Settings → Notifications has
+   the same steps, and a failed **Send test** says what to fix.
+
 2. **Pushover** (recommended for the pilot): create an application at pushover.net, paste its
    API token in Settings → Notifications → Pushover, and give each person their user key in
    Settings → On-call.

@@ -255,6 +255,12 @@ describe.skipIf(!url)('notifications (integration)', () => {
       ok: false,
       message: 'This channel has no webhook URL yet.',
     });
+    // A workflow limited to signed-in callers refuses MAS: the message says what to change.
+    mock.sinks.failNext('teams:net-alerts', 401, 1);
+    const refused = await runTestSend(deps, { kind: 'teams', channelKey: 'net-alerts' }, 'Pat');
+    expect(refused.ok).toBe(false);
+    expect(refused.message).toMatch(/HTTP 401/);
+    expect(refused.message).toMatch(/“Who can trigger the flow\?” to Anyone/);
   });
 
   it('raises a self-alert on another channel when one keeps failing', async () => {

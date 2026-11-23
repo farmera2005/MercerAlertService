@@ -5,13 +5,14 @@ import { z } from 'zod';
 import {
   HOURS_MATCH,
   INCIDENT_KINDS,
+  isLegacyWorkflowUrl,
   NOTIFY_TEST_QUEUE,
-  PAGE_VIA,
-  PRIORITIES,
-  zonedTimeToUtc,
   type NotifyTestJob,
   type NotifyTestResult,
+  PAGE_VIA,
+  PRIORITIES,
   type RouteMatch,
+  zonedTimeToUtc,
 } from '@mercer/core';
 import {
   CHANNEL_KEY_RE,
@@ -108,6 +109,13 @@ export async function saveChannelAction(
     actor,
   );
   refresh();
+  if (webhookUrl && isLegacyWorkflowUrl(webhookUrl))
+    return {
+      ok: true,
+      at: Date.now(),
+      message:
+        'Saved, but this is an old logic.azure.com address, which Microsoft stopped accepting for Teams workflows after 30 November 2025. Open the workflow in the Teams Workflows app (Edit → expand the first step) and paste its current URL.',
+    };
   return { ok: true, message: 'Saved.', at: Date.now() };
 }
 
