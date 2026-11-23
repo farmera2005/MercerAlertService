@@ -1,5 +1,5 @@
 import { SETTING_SECTIONS } from '@mercer/core';
-import { listLocalAccounts, listUsers } from '@mercer/db';
+import { listLocalAccounts, listUsers, twoFactorSummary } from '@mercer/db';
 import { LocalAccountsPanel } from '@/components/admin-panels';
 import { SettingsForm } from '@/components/settings-form';
 import { Alert, Badge, Card } from '@/components/ui';
@@ -10,13 +10,23 @@ import { entraRedirectUri } from '@/lib/sso';
 
 export const dynamic = 'force-dynamic';
 
+function twoFactorLabel(f: { totp: boolean; passkeys: number } | undefined): string | null {
+  if (!f || (!f.totp && f.passkeys === 0)) return null;
+  const parts = [
+    f.totp ? 'app' : null,
+    f.passkeys ? `${f.passkeys} passkey${f.passkeys === 1 ? '' : 's'}` : null,
+  ].filter(Boolean);
+  return parts.join(' + ');
+}
+
 export default async function SignInSettings() {
   const state = await getSettingsState();
   const cfg = state.cfg ?? server().bootstrap;
-  const [users, locals, me] = await Promise.all([
+  const [users, locals, me, factors] = await Promise.all([
     listUsers(server().db.db),
     listLocalAccounts(server().db.db),
     currentUser(),
+    twoFactorSummary(server().db.db),
   ]);
   const redirectUri = entraRedirectUri(cfg);
   return (
@@ -72,6 +82,12 @@ export default async function SignInSettings() {
             description: SETTING_SECTIONS.sso.description,
             fields: sectionFields('sso', state),
           },
+          {
+            section: 'two_factor',
+            title: SETTING_SECTIONS.two_factor.title,
+            description: SETTING_SECTIONS.two_factor.description,
+            fields: sectionFields('two_factor', state),
+          },
         ]}
         submitLabel="Save sign-in settings"
       />
@@ -123,6 +139,8 @@ export default async function SignInSettings() {
               a.lastLoginAt?.toLocaleString('en-US', { timeZone: cfg.timezone }) ?? 'never',
             disabled: !!a.disabledAt,
             isYou: me?.kind === 'local' && me.id === a.id,
+            twoFactor: twoFactorLabel(factors.get(a.id)),
+            hasTwoFactor: !!factors.get(a.id)?.totp || (factors.get(a.id)?.passkeys ?? 0) > 0,
           }))}
         />
       </Card>

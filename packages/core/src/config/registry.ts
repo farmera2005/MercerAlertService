@@ -68,6 +68,11 @@ export const SETTING_SECTIONS = {
     description:
       'Lets the IT team sign in with their Microsoft accounts. Only members of the allowed security group get in; local administrator accounts keep working as break-glass access.',
   },
+  two_factor: {
+    title: 'Two-step sign-in (local accounts)',
+    description:
+      'After the password, local accounts can confirm with an authenticator app (Microsoft Authenticator, Google Authenticator, 1Password …) or a passkey. Each person sets it up under Account security. Microsoft sign-ins get their MFA from Entra ID: require it there with Conditional Access.',
+  },
   network: {
     title: 'Reverse proxy',
     description:
@@ -615,6 +620,15 @@ export const SETTINGS: readonly SettingDef[] = [
     placeholder: 'adam@example.com, it-lead@example.com',
     help: 'Comma-separated. These people are admins even without the admin group (they must still be in the allowed group).',
     advanced: true,
+  }),
+
+  // two-step sign-in
+  s({
+    key: 'AUTH_REQUIRE_2FA',
+    section: 'two_factor',
+    label: 'Require two-step sign-in for every local account',
+    kind: 'bool',
+    help: 'Accounts without it set one up at their next sign-in, and cannot remove their last authenticator or passkey.',
   }),
 
   // reverse proxy

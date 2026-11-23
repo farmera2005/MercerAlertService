@@ -4,6 +4,7 @@ import {
   createLocalAccountAction,
   resetLocalPasswordAction,
   saveDeviceOverrideAction,
+  resetTwoFactorAction,
   setLocalAccountDisabledAction,
 } from '@/app/actions/admin';
 import { StatefulForm } from './stateful-form';
@@ -77,6 +78,9 @@ export interface LocalAccountView {
   lastLogin: string;
   disabled: boolean;
   isYou: boolean;
+  /** What second steps it has ("app + 1 passkey"), or null. */
+  twoFactor: string | null;
+  hasTwoFactor: boolean;
 }
 
 function PasswordFields({ prefix, errors }: { prefix: string; errors: Record<string, string> }) {
@@ -116,6 +120,11 @@ export function LocalAccountsPanel({ accounts }: { accounts: LocalAccountView[] 
               <span className="font-medium text-slate-100">{a.username}</span>
               {a.isYou && <Badge tone="info">you</Badge>}
               {a.disabled && <Badge tone="bad">disabled</Badge>}
+              {a.twoFactor ? (
+                <Badge tone="ok">two-step: {a.twoFactor}</Badge>
+              ) : (
+                <Badge tone="warn">no two-step sign-in</Badge>
+              )}
               <span className="text-sm text-slate-400">last sign-in {a.lastLogin}</span>
             </div>
             <div className="flex flex-wrap items-start gap-3">
@@ -138,6 +147,26 @@ export function LocalAccountsPanel({ accounts }: { accounts: LocalAccountView[] 
                   </StatefulForm>
                 </div>
               </details>
+              {!a.isYou && (
+                <StatefulForm
+                  action={resetTwoFactorAction}
+                  label={`Reset two-step sign-in for ${a.username}`}
+                >
+                  {(_, pending) => (
+                    <>
+                      <input type="hidden" name="id" value={a.id} />
+                      <Button
+                        type="submit"
+                        variant="ghost"
+                        disabled={pending || !a.hasTwoFactor}
+                        title="For a lost phone or key: removes the authenticator app, passkeys and recovery codes"
+                      >
+                        Reset two-step sign-in
+                      </Button>
+                    </>
+                  )}
+                </StatefulForm>
+              )}
               {!a.isYou && (
                 <StatefulForm
                   action={setLocalAccountDisabledAction}

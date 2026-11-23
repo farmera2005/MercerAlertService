@@ -14,6 +14,7 @@ function errorText(code: string | undefined): string | null {
   if (!code) return null;
   if (code in ENTRA_DENY_MESSAGES) return ENTRA_DENY_MESSAGES[code as EntraDenyReason];
   if (code === 'disabled') return 'Your account has been disabled in this dashboard.';
+  if (code === 'expired') return 'The sign-in took too long. Sign in again.';
   if (code === 'AccessDenied') return 'Microsoft sign-in was cancelled or refused.';
   return 'Microsoft sign-in failed. An administrator can check Settings → Sign-in and the web log.';
 }

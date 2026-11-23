@@ -17,6 +17,7 @@ export * from './repo/ingest-events';
 export * from './repo/retention';
 export * from './repo/settings';
 export * from './repo/accounts';
+export * from './repo/two-factor';
 export * from './repo/correlation';
 export * from './repo/calendar';
 export * from './seed';

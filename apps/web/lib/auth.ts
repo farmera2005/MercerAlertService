@@ -13,6 +13,7 @@ import {
 } from '@mercer/db';
 import { requestMeta } from './request';
 import { server } from './server';
+import { effectiveConfig } from './settings';
 import { auth as entraSession, signOut as entraSignOut } from './sso';
 
 const COOKIE = 'mas_session';
@@ -31,6 +32,11 @@ export interface CurrentUser {
   /** Written to audit rows: local:<username> or entra:<email>. */
   label: string;
   isAdmin: boolean;
+  /**
+   * A local account that must set up two-step sign-in (Settings require it) before doing anything
+   * else: pages send it to Account security, and actions refuse it.
+   */
+  needsTwoFactor: boolean;
 }
 
 export interface Actor {
@@ -83,12 +89,14 @@ async function localUser(): Promise<CurrentUser | null> {
   if (now - row.session.createdAt.getTime() > ABSOLUTE_MS) return null;
   if (now - row.session.lastSeenAt.getTime() > 5 * 60_000)
     await touchSession(server().db.db, id, new Date(now + IDLE_MS));
+  const required = (await effectiveConfig()).auth.require2fa;
   return {
     kind: 'local',
     id: row.account.id,
     username: row.account.username,
     label: `local:${row.account.username}`,
     isAdmin: row.account.isAdmin,
+    needsTwoFactor: required && !row.account.totpEnabledAt && row.passkeys === 0,
   };
 }
 
@@ -109,6 +117,8 @@ async function microsoftUser(): Promise<CurrentUser | null> {
     username: u.name,
     label: `entra:${u.email || u.name}`,
     isAdmin: u.isAdmin,
+    // Entra ID does the MFA for Microsoft sign-ins.
+    needsTwoFactor: false,
   };
 }
 
@@ -124,9 +134,12 @@ async function toLogin(fallback: string): Promise<never> {
   redirect(`/login?next=${encodeURIComponent(next)}`);
 }
 
+export const TWO_FACTOR_SETUP_PATH = '/account/security';
+
 /** For dashboard pages: anyone signed in. Redirects to /setup (fresh install) or /login. */
 export async function requireUser(fallback = '/'): Promise<CurrentUser> {
   const user = await currentUser();
+  if (user?.needsTwoFactor) redirect(`${TWO_FACTOR_SETUP_PATH}?required=1`);
   if (user) return user;
   return toLogin(fallback);
 }
@@ -134,13 +147,19 @@ export async function requireUser(fallback = '/'): Promise<CurrentUser> {
 /** For Settings and the setup wizard: admins only. Signed-in non-admins see a 403 page. */
 export async function requireAdmin(fallback = '/'): Promise<CurrentUser> {
   const user = await currentUser();
+  if (user?.needsTwoFactor) redirect(`${TWO_FACTOR_SETUP_PATH}?required=1`);
   if (user?.isAdmin) return user;
   if (user) redirect('/forbidden');
   return toLogin(fallback);
 }
 
-async function actorFor(user: CurrentUser | null): Promise<(Actor & { display: string }) | null> {
-  if (!user) return null;
+/** For Account security: anyone signed in, including an account that must set up two-step sign-in. */
+export async function requireSignedIn(fallback = TWO_FACTOR_SETUP_PATH): Promise<CurrentUser> {
+  return (await currentUser()) ?? toLogin(fallback);
+}
+
+/** The audit actor for a user, without the checks of adminActor/userActor. */
+export async function actorOf(user: CurrentUser): Promise<Actor & { display: string }> {
   const meta = await requestMeta();
   return {
     actorType: 'user',
@@ -150,6 +169,10 @@ async function actorFor(user: CurrentUser | null): Promise<(Actor & { display: s
     ip: meta.ip,
     userAgent: meta.userAgent,
   };
+}
+
+async function actorFor(user: CurrentUser | null): Promise<(Actor & { display: string }) | null> {
+  return !user || user.needsTwoFactor ? null : actorOf(user);
 }
 
 /** For server actions that change configuration: the audit actor, or null (not an admin). */

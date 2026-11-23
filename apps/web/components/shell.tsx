@@ -142,7 +142,13 @@ export async function Shell({
             <NavLinks isAdmin={user.isAdmin} />
             <div className="ml-auto flex items-center gap-4 text-sm text-slate-400">
               <LiveDot />
-              <span title={user.label}>{user.username}</span>
+              {user.kind === 'local' ? (
+                <Link href="/account/security" title={user.label} className="hover:text-white">
+                  {user.username}
+                </Link>
+              ) : (
+                <span title={user.label}>{user.username}</span>
+              )}
               <form action={logoutAction}>
                 <button type="submit" className="hover:text-white">
                   Sign out

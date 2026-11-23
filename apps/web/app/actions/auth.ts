@@ -1,11 +1,12 @@
 'use server';
 
 import { redirect } from 'next/navigation';
-import { hashPassword, verifyPassword } from '@mercer/core';
+import { hashPassword, signInStep, verifyPassword } from '@mercer/core';
 import {
   createFirstAdmin,
   deleteInternalSetting,
   findAccountByUsername,
+  getTwoFactorStatus,
   writeAudit,
 } from '@mercer/db';
 import { INTERNAL_SETTING_KEYS } from '@mercer/core';
@@ -15,6 +16,7 @@ import { ENTRA_PROVIDER_ID, signIn } from '@/lib/sso';
 import { noteFailure, rateLimit, requestMeta, tooManyFailures } from '@/lib/request';
 import { server } from '@/lib/server';
 import { checkSetupCode } from '@/lib/setup-code';
+import { beginSecondStep, safeNext } from '@/lib/two-factor';
 
 const LOGIN_MAX_FAILURES = 10;
 const LOGIN_WINDOW_MS = 15 * 60_000;
@@ -27,11 +29,6 @@ export interface AuthFormState {
 }
 
 const USERNAME_RE = /^[A-Za-z0-9._@-]{3,64}$/;
-
-const safeNext = (v: unknown) => {
-  const s = typeof v === 'string' ? v : '/';
-  return s.startsWith('/') && !s.startsWith('//') ? s : '/';
-};
 
 export async function claimSetupAction(_: AuthFormState, form: FormData): Promise<AuthFormState> {
   const meta = await requestMeta();
@@ -95,12 +92,22 @@ export async function loginAction(_: AuthFormState, form: FormData): Promise<Aut
     log.warn({ username, ip: meta.ip }, 'failed sign-in');
     return { message: 'Incorrect username or password.', values: { username } };
   }
+  // An authenticator app or passkey set up (or required by Settings): the second step decides.
+  const step = signInStep(
+    await getTwoFactorStatus(db.db, account.id),
+    (await effectiveConfig()).auth.require2fa,
+  );
+  if (step !== 'done') {
+    await beginSecondStep(account, safeNext(next));
+    redirect('/login/two-step');
+  }
   await startSession(account);
   await writeAudit(db.db, {
     actorType: 'user',
     actorId: `local:${account.id}`,
     actorLabel: `local:${account.username}`,
     action: 'auth.login',
+    after: { method: 'password' },
     ip: meta.ip,
     userAgent: meta.userAgent,
   });

@@ -25,6 +25,14 @@ export async function findAccountByUsername(
   return row;
 }
 
+export async function getLocalAccount(db: DbOrTx, id: number): Promise<LocalAccount | undefined> {
+  const [row] = await db
+    .select()
+    .from(localAccounts)
+    .where(and(eq(localAccounts.id, id), isNull(localAccounts.disabledAt)));
+  return row;
+}
+
 /**
  * Create the first administrator. Serialised with an advisory lock so two browsers racing through
  * the setup screen cannot both claim the installation.
@@ -79,7 +87,12 @@ export async function createSession(
 
 export async function getSession(db: DbOrTx, idHash: string, now = new Date()) {
   const [row] = await db
-    .select({ session: webSessions, account: localAccounts })
+    .select({
+      session: webSessions,
+      account: localAccounts,
+      /** Passkeys registered: with the authenticator app, whether a second step is set up. */
+      passkeys: sql<number>`(select count(*)::int from account_passkeys p where p.account_id = local_accounts.id)`,
+    })
     .from(webSessions)
     .innerJoin(localAccounts, eq(localAccounts.id, webSessions.accountId))
     .where(

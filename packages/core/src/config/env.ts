@@ -105,6 +105,8 @@ export const envSchema = z.object({
   ENTRA_ADMIN_GROUP_ID: str(''),
   /** Comma-separated e-mail addresses that are admins even without the admin group. */
   BOOTSTRAP_ADMIN_EMAILS: str(''),
+  /** Local accounts must use an authenticator app or a passkey after the password. */
+  AUTH_REQUIRE_2FA: bool(false),
 
   // --- Map & wall display ---
   MAP_MODE: z.enum(['tiles', 'image']).default('tiles'),
@@ -290,6 +292,8 @@ export interface AppConfig {
       adminGroupId: string;
       bootstrapAdminEmails: string[];
     } | null;
+    /** Local accounts must set up and use a second step (authenticator app or passkey). */
+    require2fa: boolean;
   };
   /** Remote access through a Cloudflare Tunnel. */
   tunnel: {
@@ -650,6 +654,7 @@ export function loadConfig(
             bootstrapAdminEmails: parseEmailList(e.BOOTSTRAP_ADMIN_EMAILS),
           }
         : null,
+      require2fa: e.AUTH_REQUIRE_2FA,
     },
     tunnel: {
       enabled: e.CF_TUNNEL_ENABLED,

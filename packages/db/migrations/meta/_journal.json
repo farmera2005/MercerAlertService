@@ -85,6 +85,13 @@
       "when": 1795450855244,
       "tag": "0011_noc_boards",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1795468032119,
+      "tag": "0012_two_factor",
+      "breakpoints": true
     }
   ]
 }

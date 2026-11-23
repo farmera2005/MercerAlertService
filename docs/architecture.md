@@ -597,6 +597,22 @@ MAS's reaction). Each source can be hidden.
   cookie holds only their id, and a disabled user is refused at the next request.
 - **Local administrator accounts** from the setup wizard stay as break-glass access (collapsed
   under the Microsoft button once SSO is on).
+- **Two-step sign-in for local accounts** (`AUTH_REQUIRE_2FA` makes it mandatory). Factors: an
+  authenticator app (TOTP, RFC 6238, in `core/auth/two-factor.ts`; the secret sealed with
+  SecretBox, the last used time step stored so a code works once) and passkeys
+  (`@simplewebauthn/server`; RP ID is the host in the browser's address bar, so a passkey works
+  only on the address it was made on). The first factor comes with ten recovery codes (80 bits,
+  stored as SHA-256). After the password, `loginAction` asks `signInStep()` and, when a second
+  step is needed, creates an `auth_challenges` row ('sign_in', 10 min, 5 wrong codes) with an
+  httpOnly cookie and sends the browser to `/login/two-step`. Authenticator and recovery codes
+  start the session in the same action. A passkey, or a factor set up during the sign-in (when
+  required), only marks the challenge verified: `completeSignInAction` then sets the session
+  cookie, because setting a cookie in a server action re-renders the page that called it.
+  Adding a factor during a sign-in is allowed only for an account with none (else a password
+  alone could add one). Sessions of accounts without a factor while it is required are sent to
+  `/account/security` and refused by `adminActor`/`userActor`. Admins reset an account's factors
+  in Settings → Sign-in; `dist/account.js reset-2fa <username>` does it from the VM. Microsoft
+  sign-ins rely on Entra ID for MFA.
 
 **Client addresses.** Next.js keeps a client-supplied `X-Forwarded-For`, so without a proxy any
 client could claim any IP. `instrumentation.ts` wraps `http.Server#emit` at start-up so every
@@ -793,7 +809,8 @@ sequenceDiagram
   an advisory lock.
 - **Local admin accounts** use scrypt, DB-backed sessions storing only SHA-256 token hashes,
   httpOnly cookies, a 12 h idle and 7 d absolute lifetime, and rate-limited sign-in. They are
-  the break-glass path once Entra ID SSO is configured, also from the UI.
+  the break-glass path once Entra ID SSO is configured, also from the UI. Two-step sign-in
+  (authenticator app or passkey, recovery codes) is optional per account or required for all.
 
 ## 11. Security & operations
 

@@ -30,6 +30,7 @@ import {
   EVENTS_CHANNEL,
   loadSettings,
   purgeExpired,
+  purgeExpiredChallenges,
   purgeExpiredSessions,
   settingsFingerprint,
   publishEvent,
@@ -614,6 +615,7 @@ export function createWorker(bootstrap: AppConfig, opts: WorkerOptions = {}): Wo
       await boss.work(RETENTION_QUEUE, async () => {
         const purged = await purgeExpired(dbh.db, cfg.retention);
         await purgeExpiredSessions(dbh.db);
+        await purgeExpiredChallenges(dbh.db);
         log.info({ purged }, 'retention purge complete');
       });
       await boss.schedule(RETENTION_QUEUE, cfg.retention.cron, {}, { tz: cfg.timezone });

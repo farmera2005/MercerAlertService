@@ -666,16 +666,17 @@ snapshots.
 
 Run these from `/opt/mercer-alert-service`.
 
-| Task                             | Command                                        |
-| -------------------------------- | ---------------------------------------------- |
-| Status of every service          | `docker compose ps -a`                         |
-| Health                           | `curl -sS http://127.0.0.1:3000/api/health`    |
-| Follow the worker log (raw JSON) | `docker compose logs -f worker`                |
-| Restart one service              | `docker compose restart worker`                |
-| Stop everything / start it again | `docker compose stop` / `docker compose up -d` |
-| Backup now                       | `docker compose exec backup /backup.sh now`    |
-| Disk used by Docker              | `docker system df`                             |
-| `psql` into the database         | `docker compose exec db psql -U mas mas`       |
+| Task                                                                           | Command                                                                |
+| ------------------------------------------------------------------------------ | ---------------------------------------------------------------------- |
+| Status of every service                                                        | `docker compose ps -a`                                                 |
+| Health                                                                         | `curl -sS http://127.0.0.1:3000/api/health`                            |
+| Follow the worker log (raw JSON)                                               | `docker compose logs -f worker`                                        |
+| Restart one service                                                            | `docker compose restart worker`                                        |
+| Stop everything / start it again                                               | `docker compose stop` / `docker compose up -d`                         |
+| Backup now                                                                     | `docker compose exec backup /backup.sh now`                            |
+| Disk used by Docker                                                            | `docker system df`                                                     |
+| `psql` into the database                                                       | `docker compose exec db psql -U mas mas`                               |
+| Reset a local account's two-step sign-in (lost phone, nobody else can sign in) | `docker compose exec worker node dist/account.js reset-2fa <username>` |
 
 For readable logs, install `jq` (`sudo apt-get install -y jq`) and run:
 

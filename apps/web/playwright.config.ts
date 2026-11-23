@@ -23,6 +23,8 @@ export default defineConfig({
     { name: 'sites', testMatch: /site-groups\.spec\.ts/, dependencies: ['polish'] },
     { name: 'remote', testMatch: /remote-access\.spec\.ts/, dependencies: ['sites'] },
     { name: 'noc', testMatch: /noc\.spec\.ts/, dependencies: ['remote'] },
+    // Last: it turns "require two-step sign-in" on for a while.
+    { name: 'two-factor', testMatch: /two-factor\.spec\.ts/, dependencies: ['noc'] },
   ],
   use: {
     baseURL: process.env.E2E_BASE_URL ?? 'http://localhost:3000',

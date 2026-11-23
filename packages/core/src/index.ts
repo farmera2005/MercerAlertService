@@ -17,6 +17,7 @@ export * from './correlation';
 export * from './dashboard';
 export * from './net';
 export * from './auth/entra';
+export * from './auth/two-factor';
 export * from './events';
 export * from './image-size';
 export * from './jobs';

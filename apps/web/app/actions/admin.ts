@@ -4,6 +4,7 @@ import { revalidatePath } from 'next/cache';
 import { hashPassword, isDeviceRole } from '@mercer/core';
 import {
   createLocalAccount,
+  resetTwoFactor,
   saveNodeOverride,
   setLocalAccountDisabled,
   setLocalAccountPassword,
@@ -102,6 +103,24 @@ export async function resetLocalPasswordAction(
   revalidatePath('/settings/sign-in');
   return ok
     ? done('Password changed. That account is signed out everywhere.')
+    : { ok: false, message: 'No such account.', at: Date.now() };
+}
+
+/** For a lost phone or key: remove an account's second factors and sign it out everywhere. */
+export async function resetTwoFactorAction(_: ActionResult, form: FormData): Promise<ActionResult> {
+  const actor = await adminActor();
+  if (!actor) return NOT_ADMIN;
+  const id = Number(form.get('id'));
+  if (actor.actorId === `local:${id}`)
+    return {
+      ok: false,
+      message: 'Change your own under Account security.',
+      at: Date.now(),
+    };
+  const ok = await resetTwoFactor(server().db.db, id, actor);
+  revalidatePath('/settings/sign-in');
+  return ok
+    ? done('Two-step sign-in removed and signed out. The account sets it up again at sign-in.')
     : { ok: false, message: 'No such account.', at: Date.now() };
 }
 

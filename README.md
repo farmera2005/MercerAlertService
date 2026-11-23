@@ -136,6 +136,23 @@ Settings → Sign-in also manages **local administrator accounts**: add a second
 account, reset a password (which signs that account out everywhere), or disable one. MAS
 refuses to disable the last active local account.
 
+**Two-step sign-in for local accounts.** After the password, a local account can confirm with an
+authenticator app (Microsoft Authenticator, Google Authenticator, 1Password …) or a passkey
+(Windows Hello, Touch ID, a phone, a YubiKey). Each person sets it up by clicking their name at
+the top right (**Account security**), and gets ten one-time recovery codes with the first one.
+
+- **Require it** for every local account under Settings → Sign-in → _Two-step sign-in_. An
+  account without one then sets it up at its next sign-in, before it can do anything else, and
+  can't remove its last authenticator or passkey.
+- **Lost phone or key:** use a recovery code, or have another admin click **Reset two-step
+  sign-in** next to the account. If nobody can sign in, run this on the VM:
+  `docker compose exec worker node dist/account.js reset-2fa <username>`.
+- **Passkeys** are tied to the address they were made on (the internal name or the Cloudflare
+  hostname) and need that name over HTTPS, not an IP address. The authenticator app works on any
+  address.
+- **Microsoft sign-ins** get their MFA from Entra ID: require it for the MAS app with a
+  Conditional Access policy (or security defaults).
+
 ### NOC wall display
 
 Settings → **Map & wall → New wall link** creates a link like `https://<dashboard>/wall/<token>`
@@ -596,7 +613,8 @@ All of these can be changed in Settings → General.
   questions.
 - **Sign-in.** People sign in with Entra ID and group checks. Local accounts are for
   break-glass only: passwords are hashed with scrypt, failed sign-ins are rate-limited, and a password
-  change revokes the account's sessions. Wall links are single-screen tokens, stored only as a
+  change revokes the account's sessions. Local accounts can add two-step sign-in (authenticator
+  app or passkey, with recovery codes), and Settings can require it. Wall links are single-screen tokens, stored only as a
   hash, with an optional address range and expiry.
 - **Browser hardening.** Every response carries `X-Content-Type-Options: nosniff`,
   `X-Frame-Options: DENY`, `Referrer-Policy: same-origin` and a restrictive
