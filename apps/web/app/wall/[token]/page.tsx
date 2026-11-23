@@ -1,11 +1,15 @@
 import type { Metadata } from 'next';
 import { headers } from 'next/headers';
 import { stripAddresses } from '@mercer/core';
+import { existingBoardRefs } from '@mercer/db';
 import { LiveProvider } from '@/components/live';
+import { NocWall } from '@/components/noc/board';
 import { WallScreen } from '@/components/wall';
 import { checkKioskToken } from '@/lib/kiosk';
 import { liveInitial } from '@/lib/live-initial';
 import { mapConfig } from '@/lib/map';
+import { boardView, loadBoardData } from '@/lib/noc';
+import { server } from '@/lib/server';
 import { overviewModel } from '@/lib/overview';
 import { effectiveConfig } from '@/lib/settings';
 
@@ -37,6 +41,34 @@ export default async function WallPage({ params }: { params: Promise<{ token: st
   const check = await checkKioskToken(token, await headers());
   if (!check.ok) return <Invalid />;
   const cfg = await effectiveConfig();
+  // A link set up with NOC boards shows them in turn; otherwise the classic wall.
+  const refs = check.token.boards.length
+    ? await existingBoardRefs(server().db.db, check.token.boards)
+    : [];
+  if (refs.length) {
+    const views = (await Promise.all(refs.map((r) => boardView(r)))).filter(
+      (v): v is NonNullable<typeof v> => !!v,
+    );
+    const [initial, boards] = await Promise.all([
+      liveInitial(),
+      Promise.all(
+        views.map(async (view) => ({
+          view,
+          data: await loadBoardData(view.definition, 'tv', { kioskToken: token }),
+        })),
+      ),
+    ]);
+    if (boards.length)
+      return (
+        <LiveProvider endpoint={`/api/events?k=${encodeURIComponent(token)}`} initial={initial}>
+          <NocWall
+            boards={boards}
+            rotateSec={check.token.boardRotateSec ?? cfg.wall.rotateSec}
+            pinP1={cfg.wall.pinP1}
+          />
+        </LiveProvider>
+      );
+  }
   const [model, initial, map] = await Promise.all([
     overviewModel(),
     liveInitial(),

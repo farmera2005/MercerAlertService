@@ -44,6 +44,8 @@ export interface DivisionGroup {
 
 export interface OverviewModel {
   groups: DivisionGroup[];
+  /** Monitored devices with their site, role and status (NOC site matrix). */
+  nodes: Array<{ siteId: number | null; role: string; statusNorm: string; unmanaged: boolean }>;
   tiles: SiteTile[];
   openIncidents: OverviewIncident[];
   counts: Record<Priority, number>;
@@ -145,6 +147,7 @@ export async function overviewModel(now = new Date()): Promise<OverviewModel> {
   for (const i of data.openIncidents) counts[i.priority]++;
   return {
     groups: ordered.map(({ sort: _s, ...g }) => g),
+    nodes: data.nodes,
     tiles,
     openIncidents: data.openIncidents,
     counts,

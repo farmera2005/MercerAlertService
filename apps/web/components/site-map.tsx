@@ -96,6 +96,8 @@ export function SiteMap({
         m.setView(OHIO, 8);
       }
       if (wall) {
+        // The wall has no links: keep the tile credit OpenStreetMap requires, as plain text.
+        m.attributionControl?.setPrefix(false);
         m.dragging.disable();
         m.scrollWheelZoom.disable();
         m.doubleClickZoom.disable();

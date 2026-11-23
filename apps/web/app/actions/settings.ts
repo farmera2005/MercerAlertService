@@ -16,6 +16,7 @@ import {
   addSiteAlias,
   createSite,
   deleteSite,
+  isUniqueViolation,
   requestUnplacedGeocodes,
   setSiteGroupDecision,
   siteGroupInfo,
@@ -227,7 +228,7 @@ export async function saveSiteAction(_: FormState, form: FormData): Promise<Form
     } else if (id) saved = await updateSite(db.db, id, s, actor);
     else saved = await createSite(db.db, s, actor);
   } catch (err) {
-    if (String(err).includes('sites_code_unique'))
+    if (isUniqueViolation(err, 'sites_code_unique'))
       return {
         ok: false,
         message: 'A site with that name already exists.',

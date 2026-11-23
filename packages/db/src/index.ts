@@ -34,3 +34,4 @@ export * from './repo/chat';
 export * from './repo/chat-tools';
 export * from './repo/devices';
 export * from './repo/site-groups';
+export * from './repo/noc';

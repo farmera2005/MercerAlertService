@@ -4,6 +4,7 @@ import { KioskPanel } from '@/components/kiosk-panel';
 import { MapImageForm } from '@/components/map-image-form';
 import { SettingsForm } from '@/components/settings-form';
 import { Card } from '@/components/ui';
+import { listBoardViews } from '@/lib/noc';
 import { requestMeta } from '@/lib/request';
 import { server } from '@/lib/server';
 import { getSettingsState, sectionFields } from '@/lib/settings';
@@ -14,10 +15,11 @@ export default async function WallSettings() {
   const state = await getSettingsState();
   const cfg = state.cfg ?? server().bootstrap;
   const { db } = server();
-  const [tokens, image, meta] = await Promise.all([
+  const [tokens, image, meta, boards] = await Promise.all([
     listKioskTokens(db.db),
     getSettingAssetInfo(db.db, ASSET_KEYS.mapImage),
     requestMeta(),
+    listBoardViews(),
   ]);
   return (
     <div className="space-y-6">
@@ -36,7 +38,10 @@ export default async function WallSettings() {
           revokedAt: t.revokedAt?.toISOString() ?? null,
           lastUsedAt: t.lastUsedAt?.toISOString() ?? null,
           lastUsedIp: t.lastUsedIp,
+          boards: t.boards,
+          boardRotateSec: t.boardRotateSec,
         }))}
+        boards={boards.map((b) => ({ ref: b.ref, name: b.name }))}
       />
       <SettingsForm
         sections={(['wall', 'map'] as const).map((section) => ({

@@ -22,6 +22,7 @@ export default defineConfig({
     { name: 'polish', testMatch: /polish\.spec\.ts/, dependencies: ['ai'] },
     { name: 'sites', testMatch: /site-groups\.spec\.ts/, dependencies: ['polish'] },
     { name: 'remote', testMatch: /remote-access\.spec\.ts/, dependencies: ['sites'] },
+    { name: 'noc', testMatch: /noc\.spec\.ts/, dependencies: ['remote'] },
   ],
   use: {
     baseURL: process.env.E2E_BASE_URL ?? 'http://localhost:3000',

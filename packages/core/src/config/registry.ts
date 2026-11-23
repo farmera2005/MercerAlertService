@@ -85,7 +85,8 @@ export const SETTING_SECTIONS = {
   },
   wall: {
     title: 'Wall display',
-    description: 'How the NOC wall rotates between its views.',
+    description:
+      'How the classic NOC wall rotates between its views. A wall link can show NOC boards instead (Settings → NOC boards).',
   },
   notify: {
     title: 'Notifications',
@@ -726,6 +727,15 @@ export const SETTINGS: readonly SettingDef[] = [
     section: 'wall',
     label: 'Stay on the incident list while a P1 is open',
     kind: 'bool',
+  }),
+  s({
+    key: 'NOC_WAN_PATTERN',
+    section: 'wall',
+    label: 'WAN interface names (NOC boards)',
+    kind: 'text',
+    advanced: true,
+    placeholder: 'wan|internet|isp|mpls|lte|uplink|virtual-wan',
+    help: 'A regular expression, case-insensitive. Firewall interfaces whose name, caption or alias matches are the WAN links on the WAN & circuits board; without a match, the busiest interface is used.',
   }),
 
   // notifications

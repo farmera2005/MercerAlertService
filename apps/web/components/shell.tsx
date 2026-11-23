@@ -120,13 +120,16 @@ export async function Shell({
   children,
   user,
   wide,
+  full,
 }: {
   children: ReactNode;
   user: CurrentUser;
   wide?: boolean;
+  /** The whole window width (NOC boards). */
+  full?: boolean;
 }) {
   const [initial, banners] = await Promise.all([liveInitial(), systemBanners(user)]);
-  const width = wide ? 'max-w-7xl' : 'max-w-4xl';
+  const width = full ? 'max-w-none' : wide ? 'max-w-7xl' : 'max-w-4xl';
   return (
     <LiveProvider endpoint="/api/events" initial={initial}>
       <div className="min-h-screen">

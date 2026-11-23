@@ -616,6 +616,28 @@ compact "N other sites OK" list) and the map; text is 28–44 px. It shows only 
 summaries, with IP and MAC addresses stripped, and no buttons or links. It reloads itself every
 6 h.
 
+**NOC boards** (`/noc`, and wall links that show boards). A board is a 12 × 8 grid of widgets,
+each with a position and size (`core/noc/board.ts`, browser-safe as `@mercer/core/noc`, checked by
+zod and `layoutProblems`). Four boards are built in code (Mission control, Site matrix, WAN &
+circuits, Shift overview). Admins compose more in Settings → NOC boards (`noc_boards`, audited
+as `noc_board.*`). A board can be limited to divisions, harvest-critical sites or chosen sites.
+An incident is on the board when its primary site, or a site it affects, is.
+
+- **Loading.** `apps/web/lib/noc.ts` loads only what the board's widgets need, read-only, and
+  re-renders on live events like the other pages.
+- **Figures.** These are pure, in `core/noc/compute.ts`:
+  - key figures: medians of open → acknowledged and open → resolved, and alerts per incident;
+  - recovery countdown: `opened_at` + `recovery_target_min`;
+  - WAN rows: the firewall's interfaces matching `NOC_WAN_PATTERN`, else the busiest one;
+    worst first; utilization hidden when the firewall is down;
+  - device markers per site;
+  - the activity feed: incident events and pages sent.
+- **Wall links.** `kiosk_tokens.boards` and `board_rotate_sec` (`kiosk.boards` in the audit log)
+  make a wall link show boards in turn. While a P1 is open (`WALL_PIN_P1`), it stays on the first
+  board with an incident list.
+- **TV mode.** Text is 28 px and auto-fits each panel. There are no links or buttons; addresses
+  are stripped; and devices are named by site and kind, not hostname.
+
 **Map.** Leaflet, loaded only in the browser. OpenStreetMap tiles by default (`MAP_TILE_URL`,
 any XYZ server); `MAP_MODE=image` uses an uploaded PNG/JPEG/WebP (Settings → Map & wall, stored in
 `setting_assets`) with `CRS.Simple` and each site's Map X/Y in pixels. Markers are coloured by

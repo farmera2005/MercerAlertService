@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { parseTunnelToken } from '../tunnel';
+import { DEFAULT_WAN_PATTERN } from '../noc/compute';
 import { isGuid, parseEmailList } from '../auth/entra';
 import { parseQuietHours } from '../notify/quiet';
 import { resolveFileEnv, SECRET_ENV_PREFIXES } from './file-env';
@@ -119,6 +120,8 @@ export const envSchema = z.object({
   WALL_SHOW_MAP: bool(true),
   /** Stay on the incident list while any P1 is open. */
   WALL_PIN_P1: bool(true),
+  /** NOC WAN board: firewall interfaces whose name, caption or alias match are WAN links. */
+  NOC_WAN_PATTERN: str(DEFAULT_WAN_PATTERN),
 
   // --- Correlation ---
   CORRELATION_WINDOW_SEC: int(180, 30),
@@ -319,6 +322,7 @@ export interface AppConfig {
     pushover: { appToken: string; apiBase: string } | null;
   };
   wall: { rotateSec: number; showMap: boolean; pinP1: boolean };
+  noc: { wanPattern: string };
   ai: {
     /** AI_ENABLED and an API key is set. */
     enabled: boolean;
@@ -490,6 +494,13 @@ export function loadConfig(
   ) {
     const err = new ConfigError('MAP_TILE_URL must be an http(s) URL containing {z}, {x} and {y}');
     err.issues = [{ key: 'MAP_TILE_URL', message: 'an http(s) URL with {z}, {x} and {y}' }];
+    throw err;
+  }
+  try {
+    new RegExp(e.NOC_WAN_PATTERN, 'i');
+  } catch {
+    const err = new ConfigError('NOC_WAN_PATTERN is not a valid regular expression');
+    err.issues = [{ key: 'NOC_WAN_PATTERN', message: 'not a valid regular expression' }];
     throw err;
   }
   if (e.CF_TUNNEL_TOKEN.trim() && !parseTunnelToken(e.CF_TUNNEL_TOKEN)) {
@@ -684,6 +695,7 @@ export function loadConfig(
         : null,
     },
     wall: { rotateSec: e.WALL_ROTATE_SEC, showMap: e.WALL_SHOW_MAP, pinP1: e.WALL_PIN_P1 },
+    noc: { wanPattern: e.NOC_WAN_PATTERN.trim() },
     ai: {
       enabled: e.AI_ENABLED && !!e.ANTHROPIC_API_KEY,
       apiKey: e.ANTHROPIC_API_KEY,

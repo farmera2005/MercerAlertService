@@ -5,6 +5,7 @@ import {
   createKioskAction,
   revokeKioskAction,
   rotateKioskAction,
+  setKioskBoardsAction,
   updateKioskAction,
   type KioskFormState,
 } from '@/app/actions/wall';
@@ -22,6 +23,90 @@ export interface KioskView {
   revokedAt: string | null;
   lastUsedAt: string | null;
   lastUsedIp: string | null;
+  /** NOC boards shown in turn; empty: the classic wall. */
+  boards: string[];
+  boardRotateSec: number | null;
+}
+
+export interface BoardOption {
+  ref: string;
+  name: string;
+}
+
+/** Classic wall, or NOC boards in turn with seconds per board. */
+function ShowsForm({ t, boards }: { t: KioskView; boards: BoardOption[] }) {
+  const [state, action, pending] = useActionState<KioskFormState, FormData>(
+    setKioskBoardsAction.bind(null, t.id),
+    {},
+  );
+  const [shows, setShows] = useState(t.boards.length ? 'boards' : 'classic');
+  return (
+    <form action={action} className="mt-3 space-y-3" data-testid={`kiosk-shows-${t.name}`}>
+      <fieldset className="space-y-2 text-sm">
+        <legend className="mb-1 font-medium text-slate-200">What this screen shows</legend>
+        <label className="flex items-center gap-2">
+          <input
+            type="radio"
+            name="shows"
+            value="classic"
+            checked={shows === 'classic'}
+            onChange={() => setShows('classic')}
+            className="accent-sky-400"
+          />
+          The classic wall: incidents, sites and the map in turn
+        </label>
+        <label className="flex items-center gap-2">
+          <input
+            type="radio"
+            name="shows"
+            value="boards"
+            checked={shows === 'boards'}
+            onChange={() => setShows('boards')}
+            className="accent-sky-400"
+          />
+          NOC boards, in turn
+        </label>
+      </fieldset>
+      {shows === 'boards' && (
+        <div className="space-y-3 pl-6">
+          <div className="flex flex-wrap gap-1.5">
+            {boards.map((b) => (
+              <label
+                key={b.ref}
+                className="flex cursor-pointer items-center gap-1.5 rounded-md border border-white/15 px-2 py-1 text-sm text-slate-200 has-[:checked]:border-sky-400 has-[:checked]:bg-sky-500/10"
+              >
+                <input
+                  type="checkbox"
+                  name="boards"
+                  value={b.ref}
+                  defaultChecked={t.boards.includes(b.ref)}
+                  className="accent-sky-400"
+                />
+                {b.name}
+              </label>
+            ))}
+          </div>
+          <FieldShell
+            id={`k${t.id}-sec`}
+            label="Seconds per board"
+            help="Empty: the wall setting below. While a P1 is open, the screen stays on a board with the incident list."
+          >
+            <Input
+              id={`k${t.id}-sec`}
+              name="rotateSec"
+              inputMode="numeric"
+              defaultValue={t.boardRotateSec ?? ''}
+              className="w-28"
+            />
+          </FieldShell>
+        </div>
+      )}
+      <Button type="submit" variant="secondary" disabled={pending}>
+        {pending ? 'Saving…' : 'Save'}
+      </Button>
+      {state.message && <Alert tone={state.ok ? 'success' : 'error'}>{state.message}</Alert>}
+    </form>
+  );
 }
 
 function ShowOnce({ url }: { url: string }) {
@@ -125,7 +210,7 @@ function CreateForm() {
   );
 }
 
-function TokenRow({ t, tz }: { t: KioskView; tz: string }) {
+function TokenRow({ t, tz, boards }: { t: KioskView; tz: string; boards: BoardOption[] }) {
   const [edit, editAction, editing] = useActionState<KioskFormState, FormData>(
     updateKioskAction.bind(null, t.id),
     {},
@@ -161,6 +246,11 @@ function TokenRow({ t, tz }: { t: KioskView; tz: string }) {
         ) : (
           live && <Badge tone="warn">any address</Badge>
         )}
+        <Badge tone="neutral">
+          {t.boards.length
+            ? `shows ${t.boards.map((r) => boards.find((b) => b.ref === r)?.name ?? r).join(', ')}`
+            : 'classic wall'}
+        </Badge>
       </div>
       <div className="mt-1 text-xs text-slate-400">
         Created by {t.createdBy} {when(t.createdAt)}
@@ -170,6 +260,10 @@ function TokenRow({ t, tz }: { t: KioskView; tz: string }) {
       </div>
       {live && (
         <div className="mt-3 flex flex-wrap gap-2">
+          <details className="w-full rounded-lg border border-white/10 p-3 open:bg-white/[0.02]">
+            <summary className="cursor-pointer text-sm text-slate-300">What it shows</summary>
+            <ShowsForm t={t} boards={boards} />
+          </details>
           <details className="w-full rounded-lg border border-white/10 p-3 open:bg-white/[0.02]">
             <summary className="cursor-pointer text-sm text-slate-300">Edit</summary>
             <form action={editAction} className="mt-3 space-y-3">
@@ -226,10 +320,13 @@ export function KioskPanel({
   tokens,
   tz,
   yourIp,
+  boards,
 }: {
   tokens: KioskView[];
   tz: string;
   yourIp: string | null;
+  /** NOC boards a screen can show. */
+  boards: BoardOption[];
 }) {
   return (
     <div className="space-y-6">
@@ -250,7 +347,7 @@ export function KioskPanel({
         ) : (
           <ul className="divide-y divide-white/10">
             {tokens.map((t) => (
-              <TokenRow key={t.id} t={t} tz={tz} />
+              <TokenRow key={t.id} t={t} tz={tz} boards={boards} />
             ))}
           </ul>
         )}

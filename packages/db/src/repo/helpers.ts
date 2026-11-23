@@ -44,3 +44,15 @@ export async function inSequence<T extends readonly unknown[] | []>(
   for (const q of queries) out.push(await q);
   return out as { -readonly [P in keyof T]: Awaited<T[P]> };
 }
+
+/**
+ * Whether an error is Postgres refusing a duplicate on `constraint`. Drizzle wraps the driver's
+ * error ("Failed query: …"), so the constraint is on the error or its cause, not in the message.
+ */
+export function isUniqueViolation(err: unknown, constraint: string): boolean {
+  for (let e: unknown = err, i = 0; e && i < 3; e = (e as { cause?: unknown }).cause, i++) {
+    const pgErr = e as { code?: string; constraint?: string };
+    if (pgErr.code === '23505' && pgErr.constraint === constraint) return true;
+  }
+  return String(err).includes(constraint);
+}

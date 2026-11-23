@@ -16,6 +16,7 @@ const LINKS = [
     label: 'Sites',
     match: (p: string) => p.startsWith('/sites') || p.startsWith('/nodes'),
   },
+  { href: '/noc', label: 'NOC', match: (p: string) => p.startsWith('/noc') },
   { href: '/trends', label: 'Trends', match: (p: string) => p.startsWith('/trends') },
   { href: '/digests', label: 'Digests', match: (p: string) => p.startsWith('/digests') },
   { href: '/ask', label: 'Ask', match: (p: string) => p.startsWith('/ask') },

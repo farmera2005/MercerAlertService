@@ -2,7 +2,7 @@
 
 import { revalidatePath } from 'next/cache';
 import { z } from 'zod';
-import { imageInfo, parseCidrList } from '@mercer/core';
+import { boardRefSchema, imageInfo, parseCidrList } from '@mercer/core';
 import {
   ASSET_KEYS,
   createKioskToken,
@@ -10,6 +10,7 @@ import {
   putSettingAsset,
   revokeKioskToken,
   rotateKioskToken,
+  setKioskBoards,
   updateKioskToken,
 } from '@mercer/db';
 import { adminActor } from '@/lib/auth';
@@ -168,4 +169,37 @@ export async function deleteMapImageAction(): Promise<void> {
   if (!actor) return;
   await deleteSettingAsset(server().db.db, ASSET_KEYS.mapImage, actor);
   revalidatePath('/', 'layout');
+}
+
+/** What a wall link's screen shows: the classic wall, or NOC boards in turn. */
+export async function setKioskBoardsAction(
+  id: number,
+  _: KioskFormState,
+  form: FormData,
+): Promise<KioskFormState> {
+  const actor = await adminActor();
+  if (!actor) return NOT_ADMIN;
+  const classic = form.get('shows') !== 'boards';
+  const boards = classic
+    ? []
+    : form
+        .getAll('boards')
+        .map(String)
+        .filter((b) => boardRefSchema.safeParse(b).success)
+        .slice(0, 12);
+  if (!classic && !boards.length)
+    return { ok: false, message: 'Choose at least one board, or the classic wall.' };
+  const secRaw = String(form.get('rotateSec') ?? '').trim();
+  const sec = secRaw ? Number(secRaw) : null;
+  if (sec !== null && (!Number.isInteger(sec) || sec < 5 || sec > 600))
+    return { ok: false, message: 'Seconds per board must be a whole number from 5 to 600.' };
+  const ok = await setKioskBoards(server().db.db, id, { boards, rotateSec: sec }, actor);
+  if (!ok) return { ok: false, message: 'That link no longer exists or was revoked.' };
+  revalidatePath('/settings/wall');
+  return {
+    ok: true,
+    message: classic
+      ? 'Saved: the classic wall. The screen switches within a minute.'
+      : `Saved: ${boards.length} board${boards.length === 1 ? '' : 's'}. The screen switches within a minute.`,
+  };
 }

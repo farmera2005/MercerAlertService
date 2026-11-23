@@ -144,7 +144,31 @@ for one screen, shown once. Open it in the TV's browser in kiosk / full-screen m
 sign-in. Optionally limit it to the screen's address range (the page shows your address as
 MAS sees it), give it an expiry, and **Rotate** or **Revoke** it at any time. The wall rotates
 between open incidents, the sites and the map with large text, and never shows buttons, links
-or IP addresses.
+or IP addresses. Under **What it shows**, a link can show NOC boards instead (below).
+
+### NOC dashboard
+
+**NOC** in the menu shows the NOC boards: several panels on one screen, updating live. Four are
+built in:
+
+| Board               | What it shows                                                                                                                                                                                                             |
+| ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Mission control** | Status bar (clock, SolarWinds feed, harvest, who is on call), P1–P4 counts, open incidents with age, acknowledgement and time left to the recovery target, the map, health per division, key figures and recent activity. |
+| **Site matrix**     | Every site as a tile, grouped by division. Problem sites show why, with a marker per kind of device (FW, SW, AP, SCALE, UPS, …).                                                                                          |
+| **WAN & circuits**  | One row per site, worst first: firewall state, latency and packet loss with 24-hour sparklines, and WAN in/out utilization (90 % and up is flagged).                                                                      |
+| **Shift overview**  | The last 24 hours: noise reduction, incidents opened and resolved, median time to acknowledge and to fix, alerts and incidents per hour, flapping devices, busiest interfaces, pages sent.                                |
+
+- **Your own boards.** Settings → **NOC boards** composes boards from the same widgets. Start
+  from a built-in board or a blank one, drag widgets on the 12 × 8 grid, and limit the board to
+  divisions, harvest-critical sites or chosen sites (a Grain harvest board, for example).
+- **On a TV.** Settings → Map & wall → a wall link → **What it shows** → **NOC boards**. Tick
+  one or more boards and the seconds per board. While a P1 is open, the screen stays on a board
+  with the incident list. TV boards use large text and show no links, device names or addresses.
+- **On a desktop,** incidents, sites and devices on the boards are links, and **Full screen**
+  fills a monitor.
+- **WAN links** are the firewall interfaces named like `wan`, `internet`, `isp`, `mpls` or `lte`
+  (Settings → Map & wall → Advanced, _WAN interface names_). When none matches, the busiest
+  interface is used.
 
 ### Remote access (Cloudflare Zero Trust)
 

@@ -83,6 +83,13 @@ export const kioskTokens = pgTable(
     revokedBy: text('revoked_by'),
     lastUsedAt: ts('last_used_at'),
     lastUsedIp: text('last_used_ip'),
+    /** NOC boards the screen rotates through ('mission', 'custom:3', …); empty: the classic wall. */
+    boards: text('boards')
+      .array()
+      .notNull()
+      .default(sql`'{}'::text[]`),
+    /** Seconds per board (null: WALL_ROTATE_SEC). */
+    boardRotateSec: integer('board_rotate_sec'),
   },
   (t) => [index('kiosk_tokens_active_idx').on(t.revokedAt)],
 );

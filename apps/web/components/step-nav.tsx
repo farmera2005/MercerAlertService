@@ -85,6 +85,7 @@ export const SETTINGS_TABS = [
   { href: '/settings/digests', label: 'Digests' },
   { href: '/settings/sign-in', label: 'Sign-in' },
   { href: '/settings/wall', label: 'Map & wall' },
+  { href: '/settings/noc', label: 'NOC boards' },
   { href: '/settings/general', label: 'General' },
   { href: '/settings/audit', label: 'Audit log' },
 ] as const;

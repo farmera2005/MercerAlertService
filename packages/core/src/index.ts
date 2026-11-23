@@ -9,6 +9,7 @@ export * from './mapping';
 export * from './site-groups';
 export * from './geocode';
 export * from './tunnel';
+export * from './noc';
 export * from './time';
 export * from './util';
 export * from './ingest/diff';
